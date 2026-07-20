@@ -1,359 +1,347 @@
-# BMCU, interoperability of Bambu Lab printers and restrictions introduced through firmware updates
+# BMCU、Bambu Lab 打印机的互操作性，以及固件更新引入的限制
 
-## Contents
+## 目录
 
-- [1. What BMCU is](#1-what-bmcu-is)
-- [2. The firmware update problem](#2-the-firmware-update-problem)
-- [3. New BUS certification and authorization frames](#3-new-bus-certification-and-authorization-frames)
-- [4. Firmware versions mentioned](#4-firmware-versions-mentioned)
-- [5. Scope of authorization control](#5-scope-of-authorization-control)
-- [6. The main interoperability problem](#6-the-main-interoperability-problem)
-- [7. BMCU behavior after the new restrictions](#7-bmcu-behavior-after-the-new-restrictions)
-- [8. A1 firmware `01.08.00.00` and the slicer-side problem](#8-a1-firmware-01080000-and-the-slicer-side-problem)
-- [9. Bambu Studio, AGPL and closed workflow components](#9-bambu-studio-agpl-and-closed-workflow-components)
-- [10. X2D example and the ownership problem](#10-x2d-example-and-the-ownership-problem)
-- [11. Beyond BMCU: the risk of firmware-controlled ecosystems](#11-beyond-bmcu-the-risk-of-firmware-controlled-ecosystems)
-- [12. DJI analogy](#12-dji-analogy)
-- [13. Legal context](#13-legal-context)
-
----
-
-## 1. What BMCU is
-
-BMCU is an **open-source, community multi-color system for Bambu Lab printers**. It is not an AMS clone. It is not AMS firmware running on different hardware. It is not a copy of an official Bambu Lab device. BMCU has its own firmware, its own hardware design and its own operating logic.
-
-This distinction is very important, because in practice the whole discussion about BMCU is often incorrectly reduced to the phrase "AMS emulation". Technically, every device connected to the same bus has to speak to the printer in a way that the printer understands. This is how interoperability works. A USB keyboard speaks the USB HID protocol. A network device speaks the Ethernet/IP protocol. An accessory on a serial bus speaks the protocol of that bus. **The mere fact that a device communicates compatibly with the printer does not yet mean that it is a copy of the official product.**
-
-BMCU was created by analyzing normal communication between a Bambu Lab printer and devices on the BUS. **This did not require extracting private keys, breaking encryption or stealing firmware.** The user has their own printer, their own device, their own bus and can observe communication that happens on their own hardware. On that basis, the community was able to build a separate multi-color device.
-
-For such users, BMCU was a very sensible solution. It is smaller, cheaper, open, possible to build yourself and consistent with the DIY idea. The user can print parts, buy electronics, assemble the device and use it for their own needs. This is exactly the type of project that usually strengthens a hardware ecosystem, rather than weakening it. Many people bought cheap A1 or A1 mini printers precisely because the community around them was active, and projects like BMCU increased the usefulness of those printers.
-
+- 1. BMCU 是什么
+- 2. 固件更新问题
+- 3. 新的总线认证与授权帧
+- 4. 文中提到的固件版本
+- 5. 授权控制的范围
+- 6. 主要的互操作性问题
+- 7. 新限制后 BMCU 的行为
+- 8. A1 固件 01.08.00.00 与切片软件侧的问题
+- 9. Bambu Studio、AGPL 与封闭的 workflow 组件
+- 10. X2D 示例与所有权问题
+- 11. 超越 BMCU：固件控制型生态系统的风险
+- 12. 大疆（DJI）类比
+- 13. 法律背景
 
 ---
 
-## 2. The firmware update problem
+## 1. BMCU 是什么
+
+BMCU 是一个**开源的、社区维护的 Bambu Lab 打印机多色系统**。它不是 AMS 的克隆，不是跑在不同硬件上的 AMS 固件，也不是官方 Bambu Lab 设备的复制品。BMCU 有自己的固件、自己的硬件设计和自己的运行逻辑。
+
+这个区别非常重要，因为实际上关于 BMCU 的整个讨论常常被错误地简化成一句话——"AMS 模拟"。从技术上讲，每个连到同一总线上的设备，都必须用打印机听得懂的方式和它通信，互操作性就是这样工作的。USB 键盘讲 USB HID 协议，网络设备讲以太网/IP 协议，串口总线上的配件讲该总线的协议。**一个设备仅仅以兼容方式和打印机通信，并不意味着它就是官方产品的复制品。**
+
+BMCU 是通过分析 Bambu Lab 打印机与总线上设备之间的正常通信而创造出来的。**这不需要提取私钥、破解加密或窃取固件。** 用户拥有自己的打印机、自己的设备、自己的总线，可以观察发生在自己硬件上的通信。在此基础上，社区得以构建出一个独立的多色设备。
+
+对这类用户来说，BMCU 是个非常合理的方案。它更小、更便宜、开放、可以自己动手做，也符合 DIY 精神。用户可以打印零件、购买电子件、组装设备并用于自己的需求。这恰恰是通常能**增强**而非削弱硬件生态的项目类型。许多人之所以买便宜的 A1 或 A1 mini，正是因为周边社区活跃，而像 BMCU 这样的项目提升了这些打印机的实用性。
+
+---
+
+## 2. 固件更新问题
 
 > [!IMPORTANT]
-> **The problem began when Bambu Lab started changing the operating rules of printers after purchase through printer firmware updates.**
+> **问题始于 Bambu Lab 开始通过打印机固件更新，在购买后改变打印机的运行规则。**
 
-BMCU worked without any problems on earlier firmware versions of first-generation printers. The printer was able to communicate with a device on the BUS and allowed the user to print. Not everything was perfect, but **there were no blocks from Bambu Lab.**
+BMCU 在初代打印机的早期固件版本上运行毫无问题。打印机能够与总线上的设备通信，并允许用户打印。并非一切完美，但**Bambu Lab 没有任何封锁。**
 
-Then Bambu Lab started changing the operating rules of this hardware through firmware updates.
+然后 Bambu Lab 开始通过固件更新改变这套硬件的运行规则。
 
-**On January 16, 2025, Bambu Lab officially announced a mechanism called the "Authorization Control System".** According to Bambu Lab, it was supposed to be a security mechanism. And sure - printer security is important. Nobody wants an unauthorized person to be able to remotely control the printer, move axes, change temperatures.
+**2025 年 1 月 16 日，Bambu Lab 正式宣布了一个名为"授权控制系统"（Authorization Control System）的机制。** 按 Bambu Lab 的说法，这应该是一个安全机制。没错——打印机安全很重要。没人希望未经授权的人能远程控制打印机、移动轴、改变温度。
 
-The problem is that in practice this mechanism is not limited only to a real threat from the internet. **It changes the operating rules of hardware and accessories after purchase.** It also affects devices connected locally to the printer, software from other producers, custom slicer builds and community projects.
-
+问题在于，在实践中这个机制并不只限于来自互联网的真实的威胁。**它改变了购买后硬件与配件的运行规则。** 它还影响到本地连接到打印机的设备、其他厂商的软件、自定义的切片软件构建以及社区项目。
 
 ---
 
-## 3. New BUS certification and authorization frames
+## 3. 新的总线认证与授权帧
 
-After this change, two new frames appeared in communication on the BUS:
+这一变更之后，总线上出现了两个新的通信帧：
 
-- **0x040D - device certification frame.**
-- **0x040E - device authorization frame.**
+- **0x040D - 设备认证帧。**
+- **0x040E - 设备授权帧。**
 
-This is very important technically, because these frames were not previously present in the normal operating model of devices on the BUS.
+这在技术上非常重要，因为这些帧此前并不存在于总线上设备的正常运作模型中。
 
-After these frames were introduced, there is no longer only ordinary communication between devices. The printer can also ask **"is this device approved by Bambu Lab".**
+引入这些帧之后，设备之间不再只有普通通信。打印机还可以问**"这个设备是否经过 Bambu Lab 批准"。**
 
-Frame **`0x040D`** works as a certification stage. The printer sends a query to the device and expects a response in the form of a certificate. Such a certificate can be compared to a digital identity document of the device. The printer checks whether the device presents an identity that Bambu Lab recognizes as valid.
+帧 **`0x040D`** 作为认证阶段工作。打印机向设备发送查询，并期望收到一份证书形式的响应。这种证书可以类比成设备的数字身份证。打印机会检查设备出示的身份是否 Bambu Lab 认为是有效的。
 
-Frame **`0x040E`** works as an authorization stage. After certification, the printer can send a random control message to the device and expect the device to sign it with the correct key. If the response matches the certificate, the printer considers the device authorized. If it does not match - the device is rejected.
+帧 **`0x040E`** 作为授权阶段工作。认证之后，打印机可以向设备发送一条随机的控制消息，并期望设备用正确的密钥对它签名。如果响应与证书匹配，打印机就认为设备已授权；如果不匹配——设备被拒绝。
 
 > [!IMPORTANT]
-> **This is a fundamental change in the interoperability model.**
+> **这是互操作性模型的根本性改变。**
 
-It is no longer only about whether the device talks to the printer correctly. **It is about whether the device is approved by the manufacturer.**
-
-
----
-
-## 4. Firmware versions mentioned
-
-Bambu Lab first announced this mechanism for the X1 series. Official materials mention X1 Series firmware **`01.08.03.00` or newer**.
-
-Later the same direction was moved to other series.
-
-For the P1 series, we are talking about firmware **`01.08.02.00`**.
-
-For A1 and A1 mini, we are talking about firmware **`01.05.00.00`**.
-
+这不再只是设备能否正确地与打印机对话的问题。**而是设备是否得到了制造商的批准。**
 
 ---
 
-## 5. Scope of authorization control
+## 4. 文中提到的固件版本
 
-Bambu Lab itself indicated that authorization may apply to very important printer functions. This is not about one small operation. It includes, among other things:
+Bambu Lab 最初是为 X1 系列宣布这一机制的。官方材料提到 X1 系列固件 **`01.08.03.00` 或更新版本**。
 
-- starting a print through LAN or cloud,
-- axis movement,
-- temperature control,
-- fans,
-- AMS settings,
-- calibrations,
-- firmware updates,
-- access to remote preview.
+后来同样的方向也推到了其他系列。
 
-So this is practical control over the most important functions of the printer.
+对于 P1 系列，我们说的是固件 **`01.08.02.00`**。
 
+对于 A1 和 A1 mini，我们说的是固件 **`01.05.00.00`**。
 
 ---
 
-## 6. The main interoperability problem
+## 5. 授权控制的范围
 
-And here the fundamental problem appears.
+Bambu Lab 自己指出，授权可能适用于非常重要的打印机功能。这不是某个小操作，它包括：
+
+- 通过局域网或云启动打印，
+- 轴移动，
+- 温度控制，
+- 风扇，
+- AMS 设置，
+- 校准，
+- 固件更新，
+- 远程预览访问。
+
+所以这是对打印机最重要功能的实际控制。
+
+---
+
+## 6. 主要的互操作性问题
+
+这里就出现了根本性的问题。
 
 > [!WARNING]
-> **If a user bought a printer that allowed the use of devices on the BUS, and later a firmware update changes the rules and starts requiring manufacturer authorization, then the user loses part of the hardware interoperability after purchase.**
+> **如果用户买的是一台允许使用总线上设备的打印机，后来一次固件更新改变了规则、开始要求制造商授权，那么用户在购买后便失去了一部分硬件互操作性。**
 
-This is not a normal bug fix.
+这不是普通的 bug 修复。
 
-This is not just a new feature.
+这不只是一个新功能。
 
-**This is a change to the operating rules of a device that has already been sold.**
-
+**这是对已经售出的设备运行规则的改变。**
 
 ---
 
-## 7. BMCU behavior after the new restrictions
+## 7. 新限制后 BMCU 的行为
 
-In the case of BMCU, this is very clear.
+在 BMCU 这件事上，情况非常清楚。
 
-It is also worth paying attention to a very strange detail.
+还有一个很奇怪的细节值得注意。
 
 > [!NOTE]
-> **Bambu Lab did not block BMCU immediately, even though after introducing device certification and authorization it could technically have done so already at the first attempt to use it.**
+> **Bambu Lab 并没有立即封锁 BMCU，尽管在引入设备认证与授权之后，它在技术上本可以在第一次尝试使用时就做到。**
 
-The printer allowed the first print with BMCU to start. That print could last an hour or even a month - for any length of time, as long as it was the same printing process.
+打印机允许第一次用 BMCU 启动打印。那次打印可能持续一小时甚至一个月——只要它是同一个打印过程，多长时间都行。
 
-This shows a very important thing: **the problem was not that BMCU did not work electrically or that it could not cooperate correctly with the printer.**
+这说明了一件很重要的事：**问题不在于 BMCU 电气上不工作，也不在于它无法与打印机正确协作。**
 
-Since the printer could print with BMCU for an arbitrarily long first print, it is difficult to treat the later rejection of the device as an ordinary technical problem.
-
-> [!WARNING]
-> **It looks more like a deliberate firmware-side restriction of interoperability.**
-
-And here the question appears: **why did Bambu Lab not block BMCU immediately from the first print?**
-
-Was BMCU supposed to work like a demo version? Allow the user to start one print, see "wow, it works", and then cut the device off and push them towards buying the original, much more expensive AMS from Bambu Lab?
-
-Subsequent prints could no longer start normally. The user had to reset the printer.
-
-On A1 printers, the situation was specific for some time. Despite the introduced restrictions, BMCU could still be used in practice. The user saw errors or warnings related to AMS, but printing itself was possible. The printer did not disconnect BMCU from the bus in a way that completely prevented work after every print. It was inconvenient, but still usable.
-
-So A1 users could continue to use BMCU in a way similar to how it worked before. There were HMS errors, there were warnings, but the physical printing function still worked.
-
-
----
-
-## 8. A1 firmware `01.08.00.00` and the slicer-side problem
-
-Later another update appeared.
-
-**Firmware A1 `01.08.00.00` from April 14, 2026 introduced further problems.**
-
-After this update, the printer started sending such a type of error to the slicer that it blocked the ability to print the current project. In practice, it looked like a critical error.
-
-The behavior was partly random. Sometimes the error appeared, sometimes it did not. Sometimes the project or the whole program had to be closed, opened again, the model sliced again, and only then could the print be started.
-
-This is exactly why the slicer modification makes sense.
-
-The slicer does not repair the printer firmware, does not modify the printer, does not pass device certification, does not turn BMCU into an official AMS, **does not bypass the `0x040D` and `0x040E` frame mechanism.**
-
-The slicer modification fixes the part of the problem that appears on the desktop workflow side.
-
-If the printer sends an AMS/BMCU error, and the slicer treats that error as a state blocking the whole project, the user loses the ability to start the print normally. Even if physically the printer and BMCU could still perform the job.
-
-The slicer modification is therefore about not allowing such an error to unnecessarily block the whole workflow. The slicer can ignore the blocking error state on the project side and allow the user to retry the print.
-
-> [!IMPORTANT]
-> **This is restoring practical usability, not bypassing device authorization, and this is a very important line.**
-
-The goal is interoperability. The goal is to allow the user to use their own hardware in the same way that was available at the moment of buying the printer. **The goal is not to break security mechanisms.**
-
-
----
-
-## 9. Bambu Studio, AGPL and closed workflow components
-
-At this point, Bambu Studio also has to be mentioned.
-
-Theoretically, modifying Bambu Studio should not be anything strange. **Bambu Studio is based on code from the PrusaSlicer and Slic3r family and is licensed under AGPL v3.** Bambu Lab did not write its slicer from scratch. They used an existing open-source project, with a long history and enormous community work behind it.
-
-**The AGPL license gives users the right to analyze, modify and build their own versions of the program.**
-
-That is the point of open-source.
-
-The problem is that in practice Bambu Lab built a closed ecosystem around the slicer. If the user makes their own build or modifies Bambu Studio, important functions of the official workflow start to disappear. Normal cloud printing does not work, full preview in Bambu Handy does not work, and some functions depend on the closed bambu_networking component and a signed official build.
-
-So again we see the same pattern.
-
-**First the user receives functionality when buying the printer.**
-
-**Then firmware or the ecosystem starts limiting it.**
-
-**And when the user tries to use the rights resulting from open-source, it turns out that key elements are still controlled by closed, signed components from the manufacturer.**
-
-
----
-
-## 10. X2D example and the ownership problem
-
-This problem does not apply only to first-generation printers.
-
-A very interesting example is also the second-generation X2D printer. This is important, because here we are not talking about an old printer that has been on the market for years. We are talking about a new model.
-
-X2D at the moment of purchase may arrive to the user with firmware **`01.00.01.00`**.
-
-On this firmware, BMCU works partially.
-
-That is: the first print after starting the printer works. You can normally start a print and that print works. However, the next print already requires resetting the printer.
-
-So we see exactly the same pattern: the first print works, because the printer still allows the device to operate, but after the print the firmware disconnects the device that does not pass authorization as a Bambu Lab device.
-
-It is not ideal, but the user still has some functionality. If someone prints occasionally or sometimes wants to use BMCU for one print, they may decide that they can live with it.
+既然打印机能用 BMCU 完成任意长的第一次打印，就很难把后来对设备的拒绝当作普通的技术问题。
 
 > [!WARNING]
-> **After updating to newer firmware, this partial functionality is completely blocked.** The printer requires device certification and authorization already before the first print.
+> **这看起来更像固件侧蓄意对互操作性的限制。**
 
-And here the problem becomes even more serious.
+于是问题来了：**为什么 Bambu Lab 不从第一次打印起就立即封锁 BMCU？**
 
-If the user bought a printer that arrived with firmware **`01.00.01.00`**, saw or had confirmation that BMCU works on it at least partially, and then updated the firmware and that functionality disappeared, then from their perspective the update limited the hardware after purchase.
+BMCU 是被当作试用版来用的吗？让用户启动一次打印，看到"哇，能用"，然后切断设备，把他们推向购买 Bambu Lab 原厂、贵得多的 AMS？
+
+后续的打印无法再正常启动。用户必须重置打印机。
+
+在 A1 打印机上，情况曾有一段时间比较特殊。尽管引入了限制，BMCU 在实践中仍可使用。用户会看到与 AMS 相关的错误或警告，但打印本身是可能的。打印机并没有在每次打印后都以彻底阻止工作的方式把 BMCU 从总线上断开。虽然不便，但仍可用。
+
+所以 A1 用户可以继续以类似之前的方式使用 BMCU。有 HMS 错误，有警告，但物理打印功能仍然工作。
+
+---
+
+## 8. A1 固件 01.08.00.00 与切片软件侧的问题
+
+后来出现了另一次更新。
+
+**2026 年 4 月 14 日的 A1 固件 `01.08.00.00` 引入了进一步的问题。**
+
+这次更新后，打印机会向切片软件发送一种类型的错误，导致当前项目无法打印。在实践中，它表现得像一个严重错误。
+
+这个行为部分是随机的。有时错误出现，有时不出现。有时必须关闭项目或整个程序、重新打开、重新切片模型，然后才能启动打印。
+
+这正是修改切片软件有意义的原因。
+
+切片软件不修复打印机固件、不修改打印机、不通过设备认证、不把 BMCU 变成官方 AMS，**不绕过 `0x040D` 和 `0x040E` 帧机制。**
+
+切片软件的修改修复的是出现在桌面 workflow 一侧的那部分问题。
+
+如果打印机发送一个 AMS/BMCU 错误，而切片软件把这个错误当作阻塞整个项目的状态，用户就失去了正常启动打印的能力。即便物理上打印机和 BMCU 仍能完成工作。
+
+因此切片软件的修改，是不让这类错误不必要地阻塞整个 workflow。切片软件可以忽略项目侧的阻塞错误状态，并允许用户重试打印。
+
+> [!IMPORTANT]
+> **这是在恢复实际可用性，而不是绕过设备授权——这是一条非常重要的界线。**
+
+目标是互操作性。目标是让用户能以购买打印机那一刻可用的同样方式，使用自己的硬件。**目标不是破坏安全机制。**
+
+---
+
+## 9. Bambu Studio、AGPL 与封闭的 workflow 组件
+
+这里也必须提到 Bambu Studio。
+
+理论上，修改 Bambu Studio 不该是什么怪事。**Bambu Studio 基于 PrusaSlicer 和 Slic3r 家族的代码，并以 AGPL v3 许可。** Bambu Lab 并不是从零开始写它的切片软件。他们用了一个已有的开源项目，背后有悠久的历史和庞大的社区投入。
+
+**AGPL 许可赋予用户分析、修改并构建自己版本程序的权利。**
+
+这正是开源的意义所在。
+
+问题在于，实践中 Bambu Lab 围绕切片软件构建了一个封闭生态。如果用户自己构建或修改 Bambu Studio，官方 workflow 的重要功能就开始消失。正常的云打印不能用了，Bambu Handy 里的完整预览不能用了，而某些功能依赖于封闭的 bambu_networking 组件和签名的官方构建。
+
+于是我们再次看到同样的模式。
+
+**首先，用户在购买打印机时获得功能。**
+
+**然后固件或生态开始限制它。**
+
+**而当用户试图行使开源带来的权利时，却发现关键元素仍由制造商封闭的、签名的组件控制。**
+
+---
+
+## 10. X2D 示例与所有权问题
+
+这个问题不只适用于初代打印机。
+
+一个很有意思的例子是二代 X2D 打印机。这很重要，因为这里说的不是一台已在市场上多年的老打印机，而是一款新型号。
+
+X2D 在送达用户时可能带着固件 **`01.00.01.00`**。
+
+在这个固件上，BMCU 部分可用。
+
+也就是说：启动打印机后的第一次打印是工作的。你可以正常启动一次打印，那次打印能工作。然而，下一次打印就已经需要重置打印机了。
+
+所以我们看到完全一样的模式：第一次打印能工作，因为打印机仍允许设备运行，但打印之后，固件会断开那个未通过 Bambu Lab 设备授权的设备。
+
+这不理想，但用户仍有一些功能。如果有人偶尔打印，或有时想用 BMCU 打一次，他可能觉得可以接受。
 
 > [!WARNING]
-> **Worse, after the update there is no normal path back to the previous version.** The official firmware history for the X2D printer does not even show the historical existence of the version with which the device physically arrived to the user.
+> **更新到更新的固件后，这部分功能被完全封锁。** 打印机在第一次打印之前就要求设备认证与授权。
 
-This shows the ownership problem very well.
+这里问题变得更加严重。
 
-**Does the user buy a printer?**
+如果用户买的是一台带着固件 **`01.00.01.00`** 送达的打印机，看到或确认过 BMCU 至少在它上面部分可用，然后更新了固件、功能消失了，那么从他的角度看，这次更新在购买后限制了硬件。
 
-**Or do they only buy access to a device whose operating rules the manufacturer can change through an update?**
+> [!WARNING]
+> **更糟的是，更新之后没有正常途径退回上一版本。** X2D 打印机的官方固件历史里，甚至不显示用户设备物理上送达时所带版本的历史存在。
 
-Because if the printer worked with a certain accessory, and later a firmware update blocks that possibility and does not allow going back to the previous version, then the user loses practical hardware functionality after purchase.
+这很好地说明了所有权问题。
 
-This is not about requiring official support for BMCU from Bambu Lab.
+**用户是在买一台打印机吗？**
 
-This is not about Bambu Lab having to test BMCU, guarantee BMCU functionality or help BMCU users.
+**还是仅仅买到了对一个设备的访问权，而该设备的运行规则制造商可以通过更新随意改变？**
 
-**This is about something simpler: not blocking functionality that previously worked on hardware belonging to the user.**
+因为如果一台打印机曾能与某个配件工作，后来一次固件更新封锁了这种可能且不允许退回上一版本，那么用户就在购买后失去了实际的硬件功能。
 
-This is the core of the problem.
+这不是要求 Bambu Lab 官方支持 BMCU。
 
-The manufacturer can say: "this is not our device, we do not support it, you use it at your own risk".
+这不是要求 Bambu Lab 必须测试 BMCU、保证 BMCU 功能或帮助 BMCU 用户。
 
-That is fair.
+**这是更简单的一件事：不要封锁此前在属于用户的硬件上能工作的功能。**
 
-But lack of support is one thing, and a firmware update that after purchase restricts or blocks the use of a device that previously worked is another thing.
+这是问题的核心。
 
-**This is the difference between lack of warranty and active restriction of interoperability.**
+制造商可以说："这不是我们的设备，我们不支持它，你使用风险自负。"
 
+这很公平。
+
+但不提供支持是一回事，而一次在购买后限制或封锁此前能工作的设备使用的固件更新是另一回事。
+
+**这就是"无保修"与"主动限制互操作性"之间的区别。**
 
 ---
 
-## 11. Beyond BMCU: the risk of firmware-controlled ecosystems
+## 11. 超越 BMCU：固件控制型生态系统的风险
 
-And that is exactly why BMCU is a good example of a bigger problem.
+正因如此，BMCU 是一个更大问题的好例子。
 
-Today it is about open-source multi-color.
+今天是开源多色。
 
-Tomorrow it may be about filament from another company.
+明天可能是另一家公司的 filament。
 
-Or about access to older functions that stopped being compatible with the manufacturer's policy.
+或者是访问那些不再与制造商政策兼容的旧功能。
 
-If we accept a model in which the manufacturer can arbitrarily limit functionality after purchase under the banner of security, then the boundary starts disappearing.
+如果我们接受一种模式——制造商可以以安全为名，在购买后任意限制功能——那么边界就开始消失了。
 
 > [!IMPORTANT]
-> **Security is important, but it cannot be a universal excuse for closing an ecosystem.**
+> **安全很重要，但它不能成为封闭生态的万能借口。**
 
-The real questions are specific:
+真正的问题是具体的：
 
-- what exact security problem is being solved,
-- why the solution is to restrict local interoperability,
-- why the user loses a function that previously worked,
-- why there is no "use at your own risk" mode,
-- why there is no stable path for third-party hardware,
-- why the manufacturer does not solve the real security problem without closing the whole ecosystem.
-
-
----
-
-## 12. DJI analogy
-
-It is also worth looking at the history of the team behind Bambu Lab.
-
-Bambu Lab itself published a blog post titled ["The team behind Bambu Lab X1"](https://blog.bambulab.com/the-team-behind-bambu-lab-x1/#:~:text=DJI%20consumer%20drone%20department&text=System%20Engineering%20Department%20of%20DJI&text=DJI%20goggles%2C%20digital%20FPV%20systems&text=Before%20joining%20DJI%2C%20he%20worked%20at%20Marvell&text=DJI%20gimbal%20department&text=senior%20engineer%20of%20DJI&text=system%20design%20of%20DJI%20FPV%20remote%20controllers), in which it describes the founders and key people responsible for creating Bambu Lab printers. And there, a very strong connection with **DJI** appears directly.
-
-Ye Tao worked on the DJI Mavic Pro and was the head of DJI's consumer drone division. Gao Xiufeng was connected with systems engineering at DJI. Liu Huaiyu worked on DJI Goggles, Digital FPV and FPV drones. Chen Zihan was connected with DJI gimbals.
-
-This is not about saying that experience from DJI is itself something bad. Quite the opposite - technically, it is visible that Bambu Lab can make very polished hardware.
-
-The problem lies elsewhere.
-
-In DJI, a very similar way of thinking about the ecosystem can be seen: the hardware works well, but the manufacturer increasingly controls what the user can connect, what they can use and what firmware considers allowed.
-
-A good example is DJI drone batteries.
-
-In practice, it looked absurd. The user has a drone, has batteries, everything works. They perform a firmware update, because updates are supposed to fix bugs, improve stability and security. Then they go out into the field, want to fly normally, and only on site find out that the drone will not take off because the battery does not pass authorization.
-
-**The hardware physically did not change, but the firmware changed the rules.**
-
-And this is a very similar pattern to BMCU.
-
-In the case of drone batteries, of course, one can say that the safety issue is more serious. If a battery fails in the air, the drone may fall. This is a real risk.
-
-But even then, two things have to be distinguished.
-
-One thing is a clear message:
-
-"This is not our battery. We do not support it. We do not take responsibility for it. You use it at your own risk."
-
-Another thing is a firmware update that after some time blocks or restricts the use of hardware that previously worked.
-
-This is exactly the same difference we are talking about with BMCU.
-
-Bambu Lab can say:
-
-"We do not support BMCU. This is not our device. We do not guarantee operation. The user uses it at their own risk."
-
-That would be a fair position.
-
-But lack of official support is one thing, and introducing firmware updates that change the operating rules of the printer after purchase and restrict the use of devices that previously worked is another thing.
-
-That is exactly why the analogy to DJI is important.
-
-**Because it shows a certain model of thinking: the hardware is yours, but firmware and the ecosystem increasingly decide what you are allowed to do with that hardware.**
-
-And this is a very dangerous direction.
-
-**It is enough to say "security" and suddenly the manufacturer can try to justify almost any restriction.**
-
+- 到底在解决什么确切的安全问题，
+- 为什么解决方案是限制本地互操作性，
+- 为什么用户会失去此前能工作的功能，
+- 为什么没有"风险自负"模式，
+- 为什么没有给第三方硬件的稳定路径，
+- 为什么制造商不在不封闭整个生态的情况下解决真正的安全问题。
 
 ---
 
-## 13. Legal context
+## 12. 大疆（DJI）类比
 
-In my opinion, such restrictions are not only a technical problem. They are also a legal problem.
+也值得看看 Bambu Lab 背后团队的历史。
 
-In the European Union, the most important one is **Directive (EU) 2019/771** on the sale of goods. A 3D printer with firmware, updates, an application, an account, cloud and network functions is a good with digital elements. Such a product has to remain in conformity with the contract, and that conformity includes not only the fact that the device turns on, but also functionality, compatibility, interoperability and updates.
+Bambu Lab 自己发布过一篇题为["The team behind Bambu Lab X1"](https://blog.bambulab.com/the-team-behind-bambu-lab-x1/#:~:text=DJI%20consumer%20drone%20department&text=System%20Engineering%20Department%20of%20DJI&text=DJI%20goggles%2C%20digital%20FPV%20systems&text=Before%20joining%20DJI%2C%20he%20worked%20at%20Marvell&text=DJI%20gimbal%20department&text=senior%20engineer%20of%20DJI&text=system%20design%20of%20DJI%20FPV%20remote%20controllers)的博客文章，其中描述了创建 Bambu Lab 打印机的创始人和关键人物。在那里，与 **DJI** 的强烈联系被直接点明。
 
-If before the update there was no mandatory certification and authorization of devices on the BUS, and after the update a mechanism appears that blocks independent devices, then in my opinion this is not an ordinary security update. **This is the use of firmware to restrict hardware interoperability after sale.**
+叶涛（Ye Tao）曾参与 DJI Mavic Pro 工作，并是 DJI 消费无人机部门负责人。高秀峰（Gao Xiufeng）与 DJI 的系统工程相关。刘怀宇（Liu Huaiyu）参与了 DJI Goggles、数字 FPV 和 FPV 无人机。陈子涵（Chen Zihan）与 DJI 云台相关。
 
-The same applies to **Directive (EU) 2019/770**, if we look at the application, cloud, user account, remote access and the digital workflow around the printer. The producer should not, through a software or digital service change, take away the user's real access to functions that were previously a normal part of the product's operation.
+这并不是说来自 DJI 的经验本身有什么不好。恰恰相反——从技术上看，Bambu Lab 能做出打磨得很精良的硬件是显而易见的。
 
-There is also **Directive 2009/24/EC** on computer programs. EU law has long recognized interoperability as a legal goal. Independently created software and independent devices must be able to cooperate with an existing system, as long as this is not about copying the program or stealing code.
+问题在别处。
 
-There is also the new **Directive (EU) 2024/825**, which is to apply from September 27, 2026. It goes even further and directly targets hiding information that a software update may negatively affect the operation of a product with digital elements or the use of digital content and services.
+在 DJI，可以看到一种非常相似的、对生态的思考方式：硬件工作良好，但制造商越来越控制用户能连接什么、能使用什么、以及固件认为什么是被允许的。
+
+一个好例子是 DJI 无人机电池。
+
+实践中这显得荒谬。用户有无人机、有电池，一切正常。他们执行固件更新，因为更新本应修复 bug、提升稳定性和安全性。然后他们到户外，想正常飞，却只在现场才发现无人机无法起飞，因为电池未通过授权。
+
+**硬件物理上没变，但固件改变了规则。**
+
+这与 BMCU 是极其相似的模式。
+
+在无人机电池的例子中，当然可以说安全问题更严重。如果电池在空中失效，无人机会坠落。这是真实风险。
+
+但即便如此，也必须区分两件事。
+
+一件事是明确的告知：
+
+"这不是我们的电池。我们不支持它。我们不为它负责。你使用风险自负。"
+
+另一件事是，一次固件更新在一段时间后封锁或限制了此前能工作的硬件的使用。
+
+这正是我们在 BMCU 上讨论的同一区别。
+
+Bambu Lab 可以说：
+
+"我们不支持 BMCU。这不是我们的设备。我们不保证运行。用户使用风险自负。"
+
+那会是一个公平的立场。
+
+但不提供官方支持是一回事，而引入在购买后改变打印机运行规则、限制此前能工作的设备使用的固件更新是另一回事。
+
+正因如此，与大疆的类比很重要。
+
+**因为它展示了某种思维模式：硬件是你的，但固件和生态越来越决定你被允许拿这硬件做什么。**
+
+而这是一个非常危险的方向。
+
+**只要说一句"安全"，制造商就可能试图为几乎任何限制辩护。**
+
+---
+
+## 13. 法律背景
+
+在我看来，这种限制不仅是个技术问题，也是个法律问题。
+
+在欧盟，最重要的是关于货物销售的 **Directive (EU) 2019/771**。一台带固件、更新、应用、账户、云和网络功能的 3D 打印机，是一件带有数字元素的货物。这类产品必须保持与合同的一致性，而这种一致性不仅包括设备能开机，还包括功能、兼容性、互操作性以及更新。
+
+如果更新前总线上没有强制的设备认证与授权，更新后却出现一个封锁独立设备的机制，那么在我看来这不是普通的安更新。**这是利用固件在购买后限制硬件互操作性。**
+
+如果我们看应用、云、用户账户、远程访问以及打印机周边的数字 workflow，同样的道理适用于 **Directive (EU) 2019/770**。生产者不应通过软件或数字服务的变更，夺走用户对此前作为产品正常运作一部分的功能的真实访问。
+
+还有关于计算机程序的 **Directive 2009/24/EC**。欧盟法律早已将互操作性认定为一个合法目标。独立创建的软件和独立设备必须能够与既有系统协作，只要这不是在复制程序或窃取代码。
+
+还有新的 **Directive (EU) 2024/825**，将于 2026 年 9 月 27 日起适用。它走得更远，直接针对隐瞒"软件更新可能对带有数字元素的产品的运行，或对数字内容与服务的利用产生负面影响"这一信息的行为。
 
 > [!IMPORTANT]
-> **So the direction of EU law is clear: an update cannot be a hidden tool for making a product worse after purchase.**
+> **所以欧盟法律的方向很明确：更新不能成为在购买后让产品变差的隐蔽工具。**
 
-In the USA, a similar direction can be seen in repair law. In the **"Nixing the Fix"** report, the **FTC** indicated **software locks**, **DRM**, technical protection measures and **firmware updates** as tools that can block consumers and independent repair shops. The **FTC** also announced enforcement against illegal repair restrictions, including under the **FTC Act**, antitrust law and the **Magnuson-Moss Warranty Act**.
+在美国，维修法律中可以看到类似方向。在 **"Nixing the Fix"** 报告中，**FTC** 将**软件锁**、**DRM**、技术保护措施和**固件更新**列为可以封锁消费者和独立维修店的工具。FTC 还宣布将对非法的维修限制采取执法行动，包括依据 **FTC Act**、反垄断法和 **Magnuson-Moss Warranty Act**。
 
-The sense is very similar to the EU: **the manufacturer should not use software, firmware, authorization or signed components as a tool to take control over hardware after sale.**
+意义与欧盟非常相似：**制造商不应把软件、固件、授权或签名组件当作在购买后夺取硬件控制权的工具。**
 
-In my opinion, such conduct violates the spirit of European rules on conformity of goods with digital elements, updates, functionality, compatibility and interoperability. In practice, the user buys a printer, and later the manufacturer uses firmware to restrict what that printer can do with locally connected hardware.
+在我看来，这种行为违背了欧盟关于带有数字元素的货物、更新、功能、兼容性与互操作性的一致性规则的精神。实践中，用户买了一台打印机，后来制造商用固件限制这台打印机对本地连接硬件能做什么。
 
 > [!CAUTION]
-> **This is not a normal update - This is a change to the conditions of using the product after purchase.**
+> **这不是普通更新——这是在购买后改变产品使用条件。**
