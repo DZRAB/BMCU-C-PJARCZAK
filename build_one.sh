@@ -85,15 +85,19 @@ src=".pio/build/fw/firmware.bin"
 mkdir -p "$(dirname "${out_path}")"
 cp -f "${src}" "${out_path}"
 
-# --- 复制选型指南，仅保留 README.md（与批量脚本一致）---
+# --- 复制选型指南，仅保留 README.md（目录层级与批量脚本完全一致）---
 TXT_MODE="which_to_choose_mode.txt"
 TXT_AUTOLOAD="which_to_choose_autoload.txt"
 TXT_RGB="which_to_choose_filament_rgb.txt"
 TXT_SLOTS="which_to_choose_slots.txt"
-[[ -f "${TXT_MODE}" ]]    && cp -f "${TXT_MODE}"    "single_build/${mode_dir}/README.md"
-[[ -f "${TXT_AUTOLOAD}" ]] && cp -f "${TXT_AUTOLOAD}" "single_build/${mode_dir}/${dm_dir}/README.md"
-[[ -f "${TXT_RGB}" ]]     && cp -f "${TXT_RGB}"     "single_build/${mode_dir}/${dm_dir}/${rgb_dir}/README.md"
-[[ -f "${TXT_SLOTS}" ]]   && cp -f "${TXT_SLOTS}"   "${out_path%/*}/README.md"
+# 顶层 single_build/：模式选型指南
+[[ -f "${TXT_MODE}" ]]    && cp -f "${TXT_MODE}"    "single_build/README.md"
+# 模式层：AUTOLOAD 选型指南
+[[ -f "${TXT_AUTOLOAD}" ]] && cp -f "${TXT_AUTOLOAD}" "single_build/${mode_dir}/README.md"
+# AUTOLOAD/NO_AUTOLOAD 层：RGB 选型指南
+[[ -f "${TXT_RGB}" ]]     && cp -f "${TXT_RGB}"     "single_build/${mode_dir}/${dm_dir}/README.md"
+# FILAMENT_RGB 层：slots 选型指南（该层下所有槽位共享，与批量脚本一致）
+[[ -f "${TXT_SLOTS}" ]]   && cp -f "${TXT_SLOTS}"   "single_build/${mode_dir}/${dm_dir}/${rgb_dir}/README.md"
 
 echo
 echo "DONE. 固件已生成: ${out_path}"
