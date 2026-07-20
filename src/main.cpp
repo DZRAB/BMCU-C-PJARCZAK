@@ -9,10 +9,14 @@
 #include "bambu_bus_ams.h"
 #include "ADC_DMA.h"
 #include "Debug_log.h"
+#include "aht20/aht20.h"
+#include "hal/time_hw.h"
 #include <string.h>
 
 WS2812_class SYS_RGB;
 WS2812_class RGBOUT[4];
+
+static AHT20 g_aht20;
 
 void RGB_init()
 {
@@ -221,6 +225,7 @@ int main(void)
     Motion_control_init();
     bambubus_init();
     bus_init();
+    g_aht20.init();
 
     DEBUG("START\n");
 
@@ -254,6 +259,35 @@ int main(void)
             {
                 error = -1;
                 SYS_RGB.set_RGB(0x10, 0x00, 0x00, 0);
+            }
+        }
+
+        // ===== AHT20 环境温湿度（非阻塞，每 2 秒采样一次）=====
+        {
+            static uint64_t aht20_next_ms  = 0;
+            static uint64_t aht20_deadline = 0;
+            static bool     aht20_waiting  = false;
+
+            const uint64_t now_ms = time_ms64();
+            if (!aht20_waiting && (now_ms - aht20_next_ms) >= 2000u)
+            {
+                g_aht20.start_measure();
+                aht20_waiting  = true;
+                aht20_deadline = now_ms + 90u;
+            }
+            if (aht20_waiting && now_ms >= aht20_deadline)
+            {
+                float t = 0.0f, h = 0.0f;
+                if (g_aht20.get_measure(t, h))
+                {
+                    for (uint8_t i = 0; i < 4u; i++)
+                    {
+                        ams[BAMBU_BUS_AMS_NUM].filament[i].compartment_temperature = (int8_t)(t + 0.5f);
+                        ams[BAMBU_BUS_AMS_NUM].filament[i].compartment_humidity     = (uint8_t)(h + 0.5f);
+                    }
+                }
+                aht20_waiting = false;
+                aht20_next_ms = now_ms;
             }
         }
 
