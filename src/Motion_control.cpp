@@ -190,7 +190,7 @@ static inline __attribute__((always_inline)) void MC_STU_RGB_set_latch(uint8_t c
         MC_STU_RGB_set(ch, r, g, b);
 }
 
-#if BMCU_DM_TWO_MICROSWITCH
+#if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
 static inline uint8_t dm_key_to_state(uint8_t ch, float v)
 {
     const float none_thr = MC_DM_KEY_NONE_THRESH[ch];
@@ -262,7 +262,7 @@ static constexpr int MC_PULL_DEADBAND_PCT_LOW  = 30;
 static constexpr int MC_PULL_DEADBAND_PCT_HIGH = 70;
 
 // ================ LOAD CONTROL ======================
-#if BMCU_SOFT_LOAD
+#if defined(BMCU_SOFT_LOAD) && (BMCU_SOFT_LOAD + 0)
     // Stage1
     static constexpr int   MC_LOAD_S1_FAST_PCT       = 75;
     static constexpr int   MC_LOAD_S1_HARD_STOP_PCT  = 90;  // 硬限位（保险）
@@ -453,7 +453,7 @@ static inline void MC_PULL_ONLINE_read(uint32_t now_ticks)
     MC_PULL_stu_raw[0] = pull_v_apply_polarity(0u, data[6] + MC_PULL_V_OFFSET[0]);
     const float key0   = data[7];
 
-#if BMCU_DM_TWO_MICROSWITCH
+#if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
     const float keyv[4] = { key0, key1, key2, key3 };
 
     // --- 缓冲轮手势装载 ---
@@ -1036,7 +1036,7 @@ public:
         float speed_set = 0.0f;
         const float now_speed = speed_as5600[CHx];
         float x = 0.0f;
-#if BMCU_DM_TWO_MICROSWITCH
+#if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
         bool  dm_autoload_active = false;
         float dm_autoload_x      = 0.0f;
 #endif
@@ -1070,7 +1070,7 @@ public:
 
         if (motion == filament_motion_enum::filament_motion_pressure_ctrl_idle)
         {
-        #if BMCU_DM_TWO_MICROSWITCH
+        #if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
                     // --- DM 自动装载（阶段1 + 阶段2）---
                     if (filament_channel_inserted[CHx] && (dm_loaded[CHx] == 0u))
                     {
@@ -1767,7 +1767,7 @@ public:
         // clamp
         if (motion == filament_motion_enum::filament_motion_pressure_ctrl_idle)
         {
-        #if BMCU_DM_TWO_MICROSWITCH
+        #if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
             const float lim = dm_autoload_active ? DM_AUTO_IDLE_LIM : 800.0f;
             if (x >  lim) x =  lim;
             if (x < -lim) x = -lim;
@@ -2361,7 +2361,7 @@ static void motor_motion_switch(uint64_t time_now)
 
                 MOTOR_CONTROL[num].set_motion(filament_motion_enum::filament_motion_pressure_ctrl_idle, 100, time_now);
 
-#if BMCU_DM_TWO_MICROSWITCH
+#if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
                 if (dm_fail_latch[num])      MC_STU_RGB_set_latch(num, 0xFFu, 0x00u, 0x00u, time_now, 0u);
                 else if (dm_loaded[num])     MC_STU_RGB_set_latch(num, 0x38u, 0x35u, 0x32u, time_now, 0u);
                 else                         MC_STU_RGB_set_latch(num, 0x00u, 0x00u, 0x00u, time_now, 0u);
@@ -2391,7 +2391,7 @@ static inline void stu_apply_baseline(int error, uint64_t now_ms)
             continue;
         }
 
-#if BMCU_DM_TWO_MICROSWITCH
+#if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
         if (dm_fail_latch[i])
         {
             MC_STU_RGB_set(i, 0xFFu, 0x00u, 0x00u);
@@ -2426,7 +2426,7 @@ static inline void stu_apply_baseline(int error, uint64_t now_ms)
 
 static void motor_motion_run(int error, uint64_t time_now, uint32_t now_ticks)
 {
-#if BMCU_DM_TWO_MICROSWITCH
+#if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
     for (uint8_t ch = 0; ch < kChCount; ch++)
     {
         if (!filament_channel_inserted[ch])
@@ -2512,7 +2512,7 @@ static void motor_motion_run(int error, uint64_t time_now, uint32_t now_ticks)
 
     stu_apply_baseline(error, time_now);
 
-#if BMCU_ONLINE_LED_FILAMENT_RGB
+#if defined(BMCU_ONLINE_LED_FILAMENT_RGB) && (BMCU_ONLINE_LED_FILAMENT_RGB + 0)
     auto &Acol = ams[motion_control_ams_num];
 #endif
 
@@ -2699,8 +2699,8 @@ static void motor_motion_run(int error, uint64_t time_now, uint32_t now_ticks)
         {
             const uint8_t key = MC_ONLINE_key_stu[i];
 
-#if BMCU_ONLINE_LED_FILAMENT_RGB
-    #if BMCU_DM_TWO_MICROSWITCH
+#if defined(BMCU_ONLINE_LED_FILAMENT_RGB) && (BMCU_ONLINE_LED_FILAMENT_RGB + 0)
+    #if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
             const bool show_filament_rgb = (key == 1u) && dm_loaded[i] && !dm_fail_latch[i];
     #else
             const bool show_filament_rgb = (key != 0u);
@@ -3068,7 +3068,7 @@ void Motion_control_init()
     MC_PULL_ONLINE_init();
     MC_PULL_ONLINE_read(time_ticks32());
 
-    #if BMCU_DM_TWO_MICROSWITCH
+    #if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
         for (uint8_t ch = 0; ch < kChCount; ch++)
         {
             if (!filament_channel_inserted[ch])

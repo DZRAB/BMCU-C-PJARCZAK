@@ -31,7 +31,7 @@ static inline __attribute__((always_inline)) void wait_until(uint32_t deadline)
     while (((uint32_t)(STK_CNTL - deadline) >> 31) != 0u) { }
 }
 
-#if BMCU_ONLINE_LED_FILAMENT_RGB
+#if defined(BMCU_ONLINE_LED_FILAMENT_RGB) && (BMCU_ONLINE_LED_FILAMENT_RGB + 0)
 static inline __attribute__((always_inline)) uint8_t scale8_video(uint8_t v, uint8_t scale)
 {
     return (uint8_t)(((uint16_t)v * (uint16_t)scale + 255u) >> 8);
