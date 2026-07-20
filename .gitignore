@@ -1,0 +1,6 @@
+# ===== PlatformIO 构建产物（编译中间文件）=====
+.pio/
+.piolibdeps/
+
+# ===== 编译好的固件（通过 GitHub Releases 发布，不入库）=====
+firmwares/
