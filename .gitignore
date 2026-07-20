@@ -7,3 +7,6 @@ firmwares/
 
 # ===== 单独编译（build_one.sh）产物，独立文件夹，不入库 =====
 single_build/
+
+# ===== 编辑器/IDE 本地配置（不入库）=====
+.vscode/
