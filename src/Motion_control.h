@@ -9,7 +9,7 @@ bool Motion_control_save_dm_key_none_thresholds(void);
 
 void MC_PULL_detect_channels_inserted();
 
-// Externy
+// 外部变量声明
 extern float   MC_PULL_V_OFFSET[4];
 extern float   MC_PULL_V_MIN[4];
 extern float   MC_PULL_V_MAX[4];
@@ -18,12 +18,12 @@ extern int8_t  MC_PULL_POLARITY[4];
 extern float   MC_DM_KEY_NONE_THRESH[4];
 extern bool    filament_channel_inserted[4];
 
-// platformio.ini: -DBAMBU_BUS_AMS_NUM
+// 由 platformio.ini 的 -DBAMBU_BUS_AMS_NUM 宏定义
 #ifndef BAMBU_BUS_AMS_NUM
 #define BAMBU_BUS_AMS_NUM 0
 #endif
 
-// platformio.ini: -DAMS_RETRACT_LEN
+// 由 platformio.ini 的 -DAMS_RETRACT_LEN 宏定义
 #ifndef AMS_RETRACT_LEN
 #define AMS_RETRACT_LEN 0.2f
 #endif

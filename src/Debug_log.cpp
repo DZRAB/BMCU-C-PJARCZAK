@@ -8,7 +8,7 @@
 #include "ch32v20x_dma.h"
 #include "ch32v20x_misc.h"
 
-/* ===== IRQ ===== */
+/* ===== 中断（IRQ） ===== */
 void USART3_IRQHandler(void) __attribute__((interrupt("WCH-Interrupt-fast")));
 void USART3_IRQHandler(void)
 {
@@ -21,7 +21,7 @@ void USART3_IRQHandler(void)
 static DMA_InitTypeDef g_dma;
 static uint8_t g_dbg_inited = 0;
 
-/* ===== UART3 + DMA TX ===== */
+/* ===== UART3 + DMA 发送 ===== */
 static void Debug_uart3_dma_init(uint32_t baudrate)
 {
     GPIO_InitTypeDef  gpio = {0};
@@ -58,7 +58,7 @@ static void Debug_uart3_dma_init(uint32_t baudrate)
     nv.NVIC_IRQChannelCmd                = ENABLE;
     NVIC_Init(&nv);
 
-    /* DMA1 Channel2: USART3 TX */
+    /* DMA1 通道2：USART3 发送 */
     g_dma.DMA_PeripheralBaseAddr = (uint32_t)&USART3->DATAR;
     g_dma.DMA_MemoryBaseAddr     = (uint32_t)0;
     g_dma.DMA_DIR                = DMA_DIR_PeripheralDST;
@@ -98,7 +98,7 @@ void Debug_log_write_num(const void *data, int num)
     if (num <= 0) return;
     if (!g_dbg_inited) Debug_log_init();
 
-    /* wait previous TX complete */
+    /* 等待上一次发送完成 */
     while (USART_GetFlagStatus(USART3, USART_FLAG_TC) == RESET) { }
 
     DMA_Cmd(DMA1_Channel2, DISABLE);
@@ -108,13 +108,13 @@ void Debug_log_write_num(const void *data, int num)
     g_dma.DMA_BufferSize     = (uint16_t)num;
     DMA_Init(DMA1_Channel2, &g_dma);
 
-    /* avoid TC-race: clear before start */
+    /* 避免 TC 竞争：启动前先清除 */
     USART_ClearFlag(USART3, USART_FLAG_TC);
 
     DMA_Cmd(DMA1_Channel2, ENABLE);
     USART_DMACmd(USART3, USART_DMAReq_Tx, ENABLE);
 
-    /* wait DMA/UART complete */
+    /* 等待 DMA/UART 完成 */
     while (USART_GetFlagStatus(USART3, USART_FLAG_TC) == RESET) { }
 }
 

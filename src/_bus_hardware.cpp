@@ -102,7 +102,7 @@ void bus_uart1_dma_send(unsigned char *data, uint16_t length)
     // DE = TX
     GPIOA->BSHR = GPIO_Pin_12;
 
-    // wyczyść TC
+    // 清除 TC 标志
     USART_ClearITPendingBit(USART1, USART_IT_TC);
 
     USART1->CTLR3 |= USART_DMAReq_Tx;

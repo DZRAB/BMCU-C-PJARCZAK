@@ -28,10 +28,10 @@ private:
     uint16_t      pin  = 0;
     uint8_t       num  = 0;
 
-    // GRB packed: [23:16]=G, [15:8]=R, [7:0]=B
+    // GRB 打包格式：[23:16]=G, [15:8]=R, [7:0]=B
     uint32_t last_grb[MAX_NUM] = {0u, 0u, 0u, 0u};
 
-    // cache tylko pod ONLINE/filament (porównujemy surowe RGB)
+    // 仅缓存 ONLINE/filament 状态下的数据（比较原始 RGB 值）
     uint32_t last_online_raw_rgb[MAX_NUM]   = {0u, 0u, 0u, 0u}; // RGB packed
     uint8_t  last_online_is_filament[MAX_NUM] = {0u, 0u, 0u, 0u};
 

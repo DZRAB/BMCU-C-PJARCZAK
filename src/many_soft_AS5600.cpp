@@ -9,11 +9,11 @@ static uint32_t g_iic_delay_ticks = 1;
 
 #define iic_delay() do { delayTicks32(g_iic_delay_ticks); } while (0)
 
-// address
+// 地址
 #define AS5600_write_address (0x36 << 1)
 #define AS5600_read_address  ((0x36 << 1) + 1)
 
-// regs
+// 寄存器
 #define AS5600_raw_angle 0x0C
 #define AS5600_status    0x0B
 
@@ -39,13 +39,13 @@ AS5600_soft_IIC_many::AS5600_soft_IIC_many()
 {
     numbers   = 0;
 
-    // public
+    // 公开成员
     online     = online_buf;
     magnet_stu = magnet_buf;
     raw_angle  = raw_buf;
     data       = data_buf;
 
-    // private
+    // 私有成员
     error    = error_buf;
     port_SDA = port_SDA_buf;
     port_SCL = port_SCL_buf;
@@ -69,7 +69,7 @@ AS5600_soft_IIC_many::AS5600_soft_IIC_many()
 
 AS5600_soft_IIC_many::~AS5600_soft_IIC_many()
 {
-    // brak delete...
+    // 无 delete（析构函数未释放资源）...
 }
 
 void AS5600_soft_IIC_many::enable_gpio_clock(GPIO_TypeDef* p)
@@ -82,16 +82,16 @@ void AS5600_soft_IIC_many::enable_gpio_clock(GPIO_TypeDef* p)
 
 void AS5600_soft_IIC_many::sda_mode_ipu(int i)
 {
-    // pull-up: set ODR=1 and CNF/MODE=1000b
+    // 上拉：设置 ODR=1 且 CNF/MODE=1000b
     gpio_hi(port_SDA[i], pin_SDA[i]);
-    gpio_set_cfg4(port_SDA[i], pin_SDA[i], 0x8u); // input pull-up/down
+    gpio_set_cfg4(port_SDA[i], pin_SDA[i], 0x8u); // 输入上拉/下拉
 }
 
 void AS5600_soft_IIC_many::sda_mode_od(int i)
 {
-    // output open-drain 50MHz: CNF=01, MODE=11 => 0b0111
+    // 输出开漏 50MHz：CNF=01, MODE=11 => 0b0111
     gpio_set_cfg4(port_SDA[i], pin_SDA[i], 0x7u);
-    gpio_hi(port_SDA[i], pin_SDA[i]); // release high
+    gpio_hi(port_SDA[i], pin_SDA[i]); // 释放为高电平
 }
 
 void AS5600_soft_IIC_many::set_h(GPIO_TypeDef* const* port, const uint16_t* pin)
@@ -114,7 +114,7 @@ void AS5600_soft_IIC_many::init(GPIO_TypeDef* const* GPIO_SCL_port, const uint16
     if (num > kMax) num = kMax;
     numbers = num;
 
-    // 4us delay w tickach policzone raz
+    // 4us 延迟（按 tick 计），仅计算一次
     g_iic_delay_ticks = 4u * time_hw_ticks_per_us();
     if (!g_iic_delay_ticks) g_iic_delay_ticks = 1;
 
@@ -167,7 +167,7 @@ void AS5600_soft_IIC_many::init_iic()
         gi.GPIO_Pin  = pin_SDA[i];
         GPIO_Init(port_SDA[i], &gi);
 
-        // idle high
+        // 空闲时保持高电平
         gpio_hi(port_SCL[i], pin_SCL[i]);
         gpio_hi(port_SDA[i], pin_SDA[i]);
 
@@ -190,7 +190,7 @@ void AS5600_soft_IIC_many::start_iic(unsigned char ADR)
 
 void AS5600_soft_IIC_many::stop_iic()
 {
-    // ZAWSZE doprowadź do STOP/IDLE, nawet jak error[i]==1
+    // 始终切换到 STOP/IDLE，即使 error[i]==1 也要如此
     for (int i = 0; i < numbers; i++) {
         gpio_lo(port_SCL[i], pin_SCL[i]);
         gpio_lo(port_SDA[i], pin_SDA[i]);
@@ -223,7 +223,7 @@ void AS5600_soft_IIC_many::write_iic(uint8_t byte)
 
 void AS5600_soft_IIC_many::read_iic(bool ack)
 {
-    // SDA jako INPUT_PU na czas odbioru
+    // 接收期间将 SDA 配置为 INPUT_PU（上拉输入）
     for (int i = 0; i < numbers; i++)
         if (error[i] == 0) sda_mode_ipu(i);
 
@@ -242,7 +242,7 @@ void AS5600_soft_IIC_many::read_iic(bool ack)
         set_l(port_SCL, pin_SCL);
     }
 
-    // wróć do OD żeby wysłać ACK/NACK
+    // 回到 OD 状态以便发送 ACK/NACK
     for (int i = 0; i < numbers; i++)
         sda_mode_od(i);
 
@@ -259,9 +259,9 @@ void AS5600_soft_IIC_many::read_iic(bool ack)
 
 void AS5600_soft_IIC_many::wait_ack_iic()
 {
-    set_h(port_SDA, pin_SDA);               // puść SDA
+    set_h(port_SDA, pin_SDA);               // 释放 SDA（拉高）
 
-    for (int i = 0; i < numbers; i++)       // ustaw INPUT zanim podniesiesz SCL
+    for (int i = 0; i < numbers; i++)       // 在拉高 SCL 之前先配置为 INPUT
         if (error[i] == 0) sda_mode_ipu(i);
 
     iic_delay();
@@ -270,14 +270,14 @@ void AS5600_soft_IIC_many::wait_ack_iic()
 
     for (int i = 0; i < numbers; i++) {
         if (error[i] == 0) {
-            if (port_SDA[i]->INDR & pin_SDA[i]) error[i] = 1; // NACK => 1
+            if (port_SDA[i]->INDR & pin_SDA[i]) error[i] = 1; // 收到 NACK 时置 1
         }
     }
 
     set_l(port_SCL, pin_SCL);
     iic_delay();
 
-    for (int i = 0; i < numbers; i++)       // wróć do OD
+    for (int i = 0; i < numbers; i++)       // 回到 OD 状态
         sda_mode_od(i);
 }
 

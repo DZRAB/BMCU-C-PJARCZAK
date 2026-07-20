@@ -135,10 +135,10 @@ static constexpr uint8_t  kChCount = 4;
 static constexpr int      PWM_lim  = 1000;
 static constexpr float    kAS5600_PI = 3.14159265358979323846f;
 
-// stała do przeliczenia AS5600 - liczona raz
+// 用于 AS5600 换算的常数 - 仅计算一次
 static constexpr float kAS5600_MM_PER_CNT = -(kAS5600_PI * 7.5f) / 4096.0f;
 
-// ===== AS5600 =====
+// ===== AS5600 角度传感器 =====
 AS5600_soft_IIC_many MC_AS5600;
 static GPIO_TypeDef* const AS5600_SCL_PORT[4] = { GPIOB, GPIOB, GPIOB, GPIOB };
 static const uint16_t      AS5600_SCL_PIN [4] = { GPIO_Pin_15, GPIO_Pin_14, GPIO_Pin_13, GPIO_Pin_12 };
@@ -146,7 +146,7 @@ static GPIO_TypeDef* const AS5600_SDA_PORT[4] = { GPIOD, GPIOC, GPIOC, GPIOC };
 static const uint16_t      AS5600_SDA_PIN [4] = { GPIO_Pin_0, GPIO_Pin_15, GPIO_Pin_14, GPIO_Pin_13 };
 
 float speed_as5600[4] = {0, 0, 0, 0};
-// ===== AS5600 health gate (anti-runaway) =====
+// ===== AS5600 健康门控（防失控）=====
 static uint8_t g_as5600_good[4]     = {0,0,0,0};
 static uint8_t g_as5600_fail[4]     = {0,0,0,0};
 static uint8_t g_as5600_okstreak[4] = {0,0,0,0};
@@ -154,9 +154,9 @@ static constexpr uint8_t kAS5600_FAIL_TRIP   = 3;
 static constexpr uint8_t kAS5600_OK_RECOVER  = 2;
 static inline bool AS5600_is_good(uint8_t ch) { return g_as5600_good[ch] != 0; }
 
-// ---- liniowe zwalnianie końcówki + minimalny PWM ----
+// ---- 末端线性释放 + 最小 PWM ----
 static constexpr float PULL_V_FAST   = 60.0f;   // mm/s
-static constexpr float PULL_V_END    = 12.0f;   // mm/s na samym końcu
+static constexpr float PULL_V_END    = 12.0f;   // mm/s，在最末端处
 static constexpr float PULL_RAMP_M   = 0.015f;  // 15mm strefa hamowania
 static constexpr float PULL_PWM_MIN  = 400.0f;  // "kop" przy pullback
 
@@ -254,7 +254,7 @@ static uint64_t auto_unload_arm_t0_ms[4]    = {0ull,0ull,0ull,0ull};
 static uint64_t auto_unload_active_t0_ms[4] = {0ull,0ull,0ull,0ull};
 static uint64_t auto_unload_empty_t0_ms[4]  = {0ull,0ull,0ull,0ull};
 
-bool filament_channel_inserted[4]       = {false, false, false, false}; // czy kanał fizycznie wpięty
+bool filament_channel_inserted[4]       = {false, false, false, false}; // 通道是否物理插入
 
 static constexpr float MC_PULL_PIDP_PCT = 25.0f;
 
@@ -265,47 +265,47 @@ static constexpr int MC_PULL_DEADBAND_PCT_HIGH = 70;
 #if BMCU_SOFT_LOAD
     // Stage1
     static constexpr int   MC_LOAD_S1_FAST_PCT       = 75;
-    static constexpr int   MC_LOAD_S1_HARD_STOP_PCT  = 90;  // bezpiecznik
-    static constexpr int   MC_LOAD_S1_HARD_HYS       = 2;   // wróć dopiero < (HARD_STOP - HYS)
+    static constexpr int   MC_LOAD_S1_HARD_STOP_PCT  = 90;  // 硬限位（保险）
+    static constexpr int   MC_LOAD_S1_HARD_HYS       = 2;   // 仅当低于 (HARD_STOP - HYS) 时才返回
     // Stage2 (hold_load)
     static constexpr float MC_LOAD_S2_HOLD_TARGET_PCT    = 75.0f;
-    static constexpr float MC_LOAD_S2_HOLD_BAND_LO_DELTA = 0.3f;   // push_hi = hold_target - delta
-    static constexpr float MC_LOAD_S2_PUSH_START_PCT     = 55.0f;  // start push PWM
+    static constexpr float MC_LOAD_S2_HOLD_BAND_LO_DELTA = 0.3f;   // push_hi = hold_target - delta（上限 = 目标 - 增量）
+    static constexpr float MC_LOAD_S2_PUSH_START_PCT     = 55.0f;  // 开始推送 PWM
     static constexpr float MC_LOAD_S2_PWM_HI             = 480.0f;
     static constexpr float MC_LOAD_S2_PWM_LO             = 1000.0f;
-    // ===== ON_USE CONTROL =====
+    // ===== 使用中（ON_USE）控制 =====
     static constexpr float MC_ON_USE_TARGET_PCT    = 52.0f;
-    static constexpr float MC_ON_USE_BAND_LO_DELTA = 0.2f;  // band_lo = target - delta
+    static constexpr float MC_ON_USE_BAND_LO_DELTA = 0.2f;  // band_lo = target - delta（下限 = 目标 - 增量）
     static constexpr float MC_ON_USE_BAND_HI_PCT   = 60.0f;
 #elif BMCU_P1S  // P1S
     // Stage1
     static constexpr int   MC_LOAD_S1_FAST_PCT       = 88;
-    static constexpr int   MC_LOAD_S1_HARD_STOP_PCT  = 97;  // bezpiecznik
-    static constexpr int   MC_LOAD_S1_HARD_HYS       = 2;   // wróć dopiero < (HARD_STOP - HYS)
+    static constexpr int   MC_LOAD_S1_HARD_STOP_PCT  = 97;  // 硬限位（保险）
+    static constexpr int   MC_LOAD_S1_HARD_HYS       = 2;   // 仅当低于 (HARD_STOP - HYS) 时才返回
     // Stage2 (hold_load)
     static constexpr float MC_LOAD_S2_HOLD_TARGET_PCT    = 95.0f;
-    static constexpr float MC_LOAD_S2_HOLD_BAND_LO_DELTA = 1.0f;   // push_hi = hold_target - delta
-    static constexpr float MC_LOAD_S2_PUSH_START_PCT     = 88.0f;  // start push PWM
+    static constexpr float MC_LOAD_S2_HOLD_BAND_LO_DELTA = 1.0f;   // push_hi = hold_target - delta（上限 = 目标 - 增量）
+    static constexpr float MC_LOAD_S2_PUSH_START_PCT     = 88.0f;  // 开始推送 PWM
     static constexpr float MC_LOAD_S2_PWM_HI             = 550.0f;
     static constexpr float MC_LOAD_S2_PWM_LO             = 1000.0f;
-    // ===== ON_USE CONTROL =====
+    // ===== 使用中（ON_USE）控制 =====
     static constexpr float MC_ON_USE_TARGET_PCT    = 54.0f;
-    static constexpr float MC_ON_USE_BAND_LO_DELTA = 0.2f;  // band_lo = target - delta
+    static constexpr float MC_ON_USE_BAND_LO_DELTA = 0.2f;  // band_lo = target - delta（下限 = 目标 - 增量）
     static constexpr float MC_ON_USE_BAND_HI_PCT   = 65.0f;
 #else        // A1
     // Stage1
     static constexpr int   MC_LOAD_S1_FAST_PCT       = 85;
-    static constexpr int   MC_LOAD_S1_HARD_STOP_PCT  = 95;  // bezpiecznik
-    static constexpr int   MC_LOAD_S1_HARD_HYS       = 2;   // wróć dopiero < (HARD_STOP - HYS)
+    static constexpr int   MC_LOAD_S1_HARD_STOP_PCT  = 95;  // 硬限位（保险）
+    static constexpr int   MC_LOAD_S1_HARD_HYS       = 2;   // 仅当低于 (HARD_STOP - HYS) 时才返回
     // Stage2 (hold_load)
     static constexpr float MC_LOAD_S2_HOLD_TARGET_PCT    = 90.0f;
-    static constexpr float MC_LOAD_S2_HOLD_BAND_LO_DELTA = 0.3f;   // push_hi = hold_target - delta
-    static constexpr float MC_LOAD_S2_PUSH_START_PCT     = 80.0f;  // start push PWM
+    static constexpr float MC_LOAD_S2_HOLD_BAND_LO_DELTA = 0.3f;   // push_hi = hold_target - delta（上限 = 目标 - 增量）
+    static constexpr float MC_LOAD_S2_PUSH_START_PCT     = 80.0f;  // 开始推送 PWM
     static constexpr float MC_LOAD_S2_PWM_HI             = 480.0f;
     static constexpr float MC_LOAD_S2_PWM_LO             = 1000.0f;
-    // ===== ON_USE CONTROL =====
+    // ===== 使用中（ON_USE）控制 =====
     static constexpr float MC_ON_USE_TARGET_PCT    = 52.0f;
-    static constexpr float MC_ON_USE_BAND_LO_DELTA = 0.2f;  // band_lo = target - delta
+    static constexpr float MC_ON_USE_BAND_LO_DELTA = 0.2f;  // band_lo = target - delta（下限 = 目标 - 增量）
     static constexpr float MC_ON_USE_BAND_HI_PCT   = 60.0f;
 #endif
 // ====================================================
@@ -318,7 +318,7 @@ static constexpr float    CAL_RESET_NEAR_MIN    = 0.03f;
 static int      g_hold_ch = -1;
 static uint32_t g_hold_t0_ticks = 0;
 
-// kiedy kanał OSTATNIO wyszedł z on_use (0 = nigdy, 1 = marker "był kiedykolwiek") (patch do wersji BMCU DM przy automatycznej zmianie filamentu gdy się skończy, żeby ekstruder nie trzymał filamentu)
+// 通道最近一次退出 on_use 的时间（0=从未，1=“曾经”标记）（用于 BMCU DM 版本的补丁：当 filament 用完自动切换时，避免挤出机继续夹持 filament）
 static uint64_t g_last_on_use_exit_ms[4] = {0,0,0,0};
 
 extern void RGB_update();
@@ -440,7 +440,7 @@ static inline void MC_PULL_ONLINE_read(uint32_t now_ticks)
 {
     const float *data = ADC_DMA_get_value();
 
-    // mapowanie ADC -> kanały
+    // ADC 到通道的映射
     MC_PULL_stu_raw[3] = pull_v_apply_polarity(3u, data[0] + MC_PULL_V_OFFSET[3]);
     const float key3   = data[1];
 
@@ -456,7 +456,7 @@ static inline void MC_PULL_ONLINE_read(uint32_t now_ticks)
 #if BMCU_DM_TWO_MICROSWITCH
     const float keyv[4] = { key0, key1, key2, key3 };
 
-    // --- Buffer Gesture Load  ---
+    // --- 缓冲轮手势装载 ---
     static uint32_t gst_t0_ticks[4]     = {0,0,0,0};
     static uint8_t  gst_step[4]         = {0,0,0,0};      // 0=idle, 1=wait_low, 2=wait_return
     static bool     gst_active[4]       = {false,false,false,false};
@@ -531,9 +531,9 @@ static inline void MC_PULL_ONLINE_read(uint32_t now_ticks)
 
         MC_ONLINE_key_stu[i] = state;
     }
-    // --- End Buffer Gesture Load  ---
+    // --- 缓冲轮手势装载结束 ---
 #else
-    // online key: tylko jeśli kanał fizycznie wpięty
+    // online 按键：仅当通道物理插入时
     MC_ONLINE_key_stu[3] = (filament_channel_inserted[3] && (key3 > 1.7f)) ? 1u : 0u;
     MC_ONLINE_key_stu[2] = (filament_channel_inserted[2] && (key2 > 1.7f)) ? 1u : 0u;
     MC_ONLINE_key_stu[1] = (filament_channel_inserted[1] && (key1 > 1.7f)) ? 1u : 0u;
@@ -545,7 +545,7 @@ static inline void MC_PULL_ONLINE_read(uint32_t now_ticks)
     {
         const bool ins = filament_channel_inserted[i];
 
-        // jeśli kanał nie jest wpięty -> neutral
+        // 如果通道未插入 -> 置为中性状态
         if (!ins)
         {
             MC_ONLINE_key_stu[i] = 0;
@@ -568,7 +568,7 @@ static inline void MC_PULL_ONLINE_read(uint32_t now_ticks)
         else                                      MC_PULL_stu[i] = 0;
     }
 
-    // pressure do hosta (tylko dla aktywnego kanału)
+    // 上报给主机的压力值（仅针对当前激活的通道）
     auto &A = ams[motion_control_ams_num];
     const uint8_t num = A.now_filament_num;
 
@@ -584,7 +584,7 @@ static inline void MC_PULL_ONLINE_read(uint32_t now_ticks)
     }
 }
 
-// ===== zapis kierunku silników + progow DM key =====
+// ===== 保存电机方向 + DM 按键阈值 =====
 struct alignas(4) Motion_control_save_struct
 {
     int Motion_control_dir[4];
@@ -1041,14 +1041,14 @@ public:
         float dm_autoload_x      = 0.0f;
 #endif
 
-        // info o ostatnim wyjściu z on_use
+        // 关于最近一次退出 on_use 的信息
         const uint64_t t_exit  = g_last_on_use_exit_ms[CHx];
         const bool had_on_use  = (t_exit != 0);
         const bool has_exit_ts = (t_exit > 1);
         uint64_t dt_exit = 0;
         if (has_exit_ts) dt_exit = (now_ms - t_exit);
 
-        // aktywne tylko: idle + brak filamentu + kanał wpięty + kiedykolwiek był w on_use
+        // 仅在以下情况激活：idle（空闲）+ 无 filament + 通道已插入 + 曾经进入过 on_use
         const bool post_on_use_active =
             (motion == filament_motion_enum::filament_motion_pressure_ctrl_idle) &&
             (MC_ONLINE_key_stu[CHx] == 0) &&
@@ -1071,7 +1071,7 @@ public:
         if (motion == filament_motion_enum::filament_motion_pressure_ctrl_idle)
         {
         #if BMCU_DM_TWO_MICROSWITCH
-                    // --- DM autoload (Stage1 + Stage2) ---
+                    // --- DM 自动装载（阶段1 + 阶段2）---
                     if (filament_channel_inserted[CHx] && (dm_loaded[CHx] == 0u))
                     {
                         const uint8_t ks = MC_ONLINE_key_stu[CHx];
@@ -1193,7 +1193,7 @@ public:
                                     break;
                                 }
 
-                                // remain -= moved
+                                // 剩余长度 -= 已移动量
                                 {
                                     const float moved = absf(cur_m - dm_auto_last_m[CHx]);
                                     dm_auto_last_m[CHx] = cur_m;
@@ -1253,7 +1253,7 @@ public:
                                     break;
                                 }
 
-                                // remain += moved
+                                // 剩余长度 += 已移动量
                                 {
                                     const float moved = absf(cur_m - dm_auto_last_m[CHx]);
                                     dm_auto_last_m[CHx] = cur_m;
@@ -1404,7 +1404,7 @@ public:
                 }
                 else
                 {
-                    // po 10s: idle jakby filament był -> tylko na krańcach (MC_PULL_stu != 0)
+                    // 10秒后：即便有 filament 也按 idle 处理 -> 仅在末端（MC_PULL_stu != 0）动作
                     if (MC_PULL_stu[CHx] != 0)
                     {
                         const float pct = MC_PULL_pct_f[CHx];
@@ -1419,7 +1419,7 @@ public:
             }
             else
             {
-                // normalny idle z filamentem
+                // 带有 filament 的常规 idle 状态
                 if (MC_PULL_stu[CHx] != 0)
                 {
                     const float pct = MC_PULL_pct_f[CHx];
@@ -1432,11 +1432,11 @@ public:
                 }
             }
         }
-        else if (motion == filament_motion_enum::filament_motion_redetect) // wyjście do braku filamentu -> ponowne podanie
+        else if (motion == filament_motion_enum::filament_motion_redetect) // 退出到无 filament 状态 -> 重新送料
         {
             x = -dir * 900.0f;
         }
-        else if (MC_ONLINE_key_stu[CHx] != 0) // kanał aktywny i jest filament
+        else if (MC_ONLINE_key_stu[CHx] != 0) // 通道已激活且有 filament
         {
             if (motion == filament_motion_enum::filament_motion_before_pull_back)
             {
@@ -1458,13 +1458,13 @@ public:
                 }
                 else
                 {
-                    const float err = pct - target; // dodatni
+                    const float err = pct - target; // 正值
                     on_use_need_move = true;
                     on_use_abs_err   = err;
 
                     const float mag = retract_mag_from_err(err, 850.0f);
 
-                    x = dir * mag;          // tylko cofanie
+                    x = dir * mag;          // 仅回退（不前进）
                     if (x * dir < 0.0f) x = 0.0f;
                 }
             }
@@ -1703,9 +1703,9 @@ public:
                     }
                 }
 
-                if (motion == filament_motion_enum::filament_motion_pull) // cofanie
+                if (motion == filament_motion_enum::filament_motion_pull) // 回退
                 {
-                    speed_set = g_pull_speed_set[CHx]; // dynamiczne (liniowo w końcówce)
+                    speed_set = g_pull_speed_set[CHx]; // 动态（末端线性变化）
                 }
 
                 if (do_speed_pid)
@@ -1717,7 +1717,7 @@ public:
             x = 0.0f;
         }
 
-        // stałe tryby
+        // 固定模式
         const bool pull_mode = (motion == filament_motion_enum::filament_motion_pull);
         const bool pb_mode = (motion == filament_motion_enum::filament_motion_before_pull_back);
 
@@ -1745,7 +1745,7 @@ public:
             float k = g_pull_remain_m[CHx] / PULL_RAMP_M;
             k = clampf(k, 0.0f, 1.0f);
 
-            // daleko: ~pwm_zero (500), przy końcu: >=400
+            // 远处：约 pwm_zero（500），接近末端：>=400
             pwm0 = PULL_PWM_MIN + (pwm_zero - PULL_PWM_MIN) * k;
 
             if (pwm0 < PULL_PWM_MIN) pwm0 = PULL_PWM_MIN;
@@ -1783,7 +1783,7 @@ public:
             if (x < (float)-PWM_lim) x = (float)-PWM_lim;
         }
 
-        // ON_USE: min PWM + anty-stall
+        // ON_USE：最小 PWM + 防堵转（anti-stall）
         static float    stall_s[4] = {0,0,0,0};
         static uint64_t block_until_ms[4] = {0,0,0,0};
 
@@ -2001,7 +2001,7 @@ void Motion_control_set_PWM(uint8_t CHx, int PWM)
     }
 }
 
-// ===== AS5600 distance/speed =====
+// ===== AS5600 距离/速度 =====
 int32_t as5600_distance_save[4] = {0,0,0,0};
 
 void AS5600_distance_updata(uint32_t now_ticks)
@@ -2093,7 +2093,7 @@ void AS5600_distance_updata(uint32_t now_ticks)
     }
 }
 
-// ===== stany logiki filamentu =====
+// ===== filament 逻辑状态 =====
 enum filament_now_position_enum
 {
     filament_idle,
@@ -2114,7 +2114,7 @@ static float filament_pull_back_target[4] = {
     motion_control_pull_back_distance
 };
 
-// BEFORE_PULLBACK: zapis realnie "wycofanej" drogi (m) (sumowanie całego wycofania)
+// BEFORE_PULLBACK：记录实际“回退”的距离（米）（累加整个回退过程）
 static float  before_pb_last_m[4]      = {0,0,0,0};
 static float  before_pb_retracted_m[4] = {0,0,0,0};
 static int8_t before_pb_sign[4]        = {0,0,0,0};
@@ -2153,10 +2153,10 @@ static bool motor_motion_filamnet_pull_back_to_online_key(uint64_t time_now)
             }
             else
             {
-                const float remain = target - d; // m (>=0)
+                const float remain = target - d; // 米（>=0）
                 g_pull_remain_m[i] = (remain > 0.0f) ? remain : 0.0f;
 
-                float k = g_pull_remain_m[i] / PULL_RAMP_M;   // 1..0 w końcówce
+                float k = g_pull_remain_m[i] / PULL_RAMP_M;   // 1..0，越接近末端越接近 0
                 k = clampf(k, 0.0f, 1.0f);
 
                 const float v = PULL_V_END + (PULL_V_FAST - PULL_V_END) * k; // mm/s
@@ -2844,7 +2844,7 @@ void Motion_control_run(int error)
     }
 }
 
-// ===== PWM init =====
+// ===== PWM 初始化 =====
 void MC_PWM_init()
 {
     GPIO_InitTypeDef GPIO_InitStructure;
@@ -2921,7 +2921,7 @@ void MC_PWM_init()
     TIM_Cmd(TIM4, ENABLE);
 }
 
-// różnica kątów
+// 角度差值计算
 static inline int M5600_angle_dis(int16_t angle1, int16_t angle2)
 {
     int d = (int)angle1 - (int)angle2;
@@ -2930,7 +2930,7 @@ static inline int M5600_angle_dis(int16_t angle1, int16_t angle2)
     return d;
 }
 
-// test kierunku silników
+// 电机方向测试
 static void MOTOR_get_dir()
 {
     int  dir[4]     = {0,0,0,0};
@@ -2955,10 +2955,10 @@ static void MOTOR_get_dir()
         dir[i] = Motion_control_data_save.Motion_control_dir[i];
     }
 
-    // Start test tylko tam, gdzie:
-    // - AS5600 online
-    // - kanał fizycznie wpięty
-    // - dir nieznany (0)
+    // 仅在以下条件启动测试：
+    // - AS5600 在线
+    // - 通道已物理插入
+    // - 方向未知（0）
     for (uint8_t i = 0; i < kChCount; i++)
     {
         if (AS5600_is_good(i) && filament_channel_inserted[i] && (dir[i] == 0))
@@ -2968,11 +2968,11 @@ static void MOTOR_get_dir()
         }
     }
 
-    // jeśli nie ma nic do testowania -> nie rób NIC, nie zapisuj, nie psuj
+    // 如果没有需要测试的内容 -> 不做任何事、不保存、不破坏
     if (!(test[0] || test[1] || test[2] || test[3]))
         return;
 
-    // czekaj max 2s na ruch (200 * 10ms)
+    // 最多等待 2 秒让电机转动（200 * 10ms）
     for (int t = 0; t < 200; t++)
     {
         delay(10);
@@ -2984,7 +2984,7 @@ static void MOTOR_get_dir()
         {
             if (!test[i]) continue;
 
-            // jeśli czujnik zniknął po drodze -> abort kanału (nie zapisuj)
+            // 如果传感器中途消失 -> 中止该通道（不保存）
             if (!MC_AS5600.online[i])
             {
                 Motion_control_set_PWM(i, 0);
@@ -2998,7 +2998,7 @@ static void MOTOR_get_dir()
             {
                 Motion_control_set_PWM(i, 0);
 
-                // AS5600 odwrotnie względem magnesu
+                // AS5600 相对于磁铁为反向
                 dir[i] = (angle_dis > 0) ? 1 : -1;
 
                 test[i] = false;
@@ -3014,11 +3014,11 @@ static void MOTOR_get_dir()
         if (t == 199) timed_out = true;
     }
 
-    // stop dla niedokończonych
+    // 停止尚未完成的测试
     for (uint8_t i = 0; i < kChCount; i++)
         if (test[i]) Motion_control_set_PWM(i, 0);
 
-    // zaktualizuj tylko tam, gdzie faktycznie zmieniło się dir
+    // 仅更新方向确实发生变化的通道
     for (uint8_t i = 0; i < kChCount; i++)
     {
         if (dir[i] != Motion_control_data_save.Motion_control_dir[i])
@@ -3028,8 +3028,8 @@ static void MOTOR_get_dir()
         }
     }
 
-    // zapis tylko jeśli była realna detekcja ruchu (dir => ±1)
-    // Jak brak 24V i nic się nie ruszyło -> any_detect=false -> NIE zapisujemy.
+    // 仅当确实检测到运动（dir => ±1）时才保存
+    // 若缺少 24V 且电机未转动 -> any_detect=false -> 不保存。
     if (any_detect && any_change)
     {
         Motion_control_save();
@@ -3040,7 +3040,7 @@ static void MOTOR_get_dir()
     }
 }
 
-// init motorów
+// 电机初始化
 static void MOTOR_init()
 {
     MC_PWM_init();

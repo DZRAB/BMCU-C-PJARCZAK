@@ -5,7 +5,7 @@
 #define BAMBU_BUS_AMS_NUM 0
 #endif
 
-// === NVM w OSTATNIM sektorze 4KB (CH32V203C8: flash kończy się na 0x08010000) ===
+// === NVM 位于最后一个 4KB 扇区（CH32V203C8：flash 结束地址为 0x08010000）===
 #define FLASH_NVM_BASE_ADDR   ((uint32_t)0x0800F000)   // 4KB sector
 
 #define FLASH_NVM_CAL_ADDR    (FLASH_NVM_BASE_ADDR + 0x000) // 1x256B
@@ -17,7 +17,7 @@
 #define FLASH_NVM_PAGE_COUNT    (FLASH_NVM_TOTAL_SIZE / FLASH_NVM256_PAGE_SIZE)
 #define NVM256_CRC_OFF         (252u)
 
-// Magici / wersje
+// 幻数 / 版本标识
 static constexpr uint32_t MAGIC_FIL = 0x314C4946u; // 'FIL1'
 static constexpr uint32_t MAGIC_CAL = 0x324C4143u; // 'CAL2'
 static constexpr uint32_t MAGIC_MOT = 0x31544F4Du; // 'MOT1'

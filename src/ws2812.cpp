@@ -63,7 +63,7 @@ void WS2812_class::init(uint8_t _num, GPIO_TypeDef* _port, uint16_t _pin)
     dirty = false;
 
     if (!g_ws2812_rst_ticks) {
-        // 50us według datasheet, damy 100us
+        // 数据手册要求 50us，这里用 100us
         g_ws2812_rst_ticks = 100u * time_hw_ticks_per_us();
         if (!g_ws2812_rst_ticks) g_ws2812_rst_ticks = 1u;
     }
@@ -109,7 +109,7 @@ void WS2812_class::updata(void)
 
     uint32_t irq = irq_save_wch();
 
-    // wyrównanie startu do granicy ticka STK
+    // 将起始对齐到 STK tick 的边界
     uint32_t base = STK_CNTL;
     while (STK_CNTL == base) { }
     base = STK_CNTL;
@@ -173,7 +173,7 @@ void WS2812_class::set_RGB_online(uint8_t R, uint8_t G, uint8_t B, uint8_t index
     last_online_is_filament[index] = 1u;
     last_online_raw_rgb[index]     = raw;
 
-    // profil "kanał 1": gamma + TypicalLEDStrip (G=176, B=240) + cap=32
+    // "通道1" 配置档：gamma + TypicalLEDStrip（G=176, B=240）+ 上限=32
     uint8_t rr = kGamma8[R];
     uint8_t gg = kGamma8[G];
     uint8_t bb = kGamma8[B];

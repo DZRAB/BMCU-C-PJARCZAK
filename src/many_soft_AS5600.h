@@ -18,7 +18,7 @@ public:
     AS5600_soft_IIC_many();
     ~AS5600_soft_IIC_many();
 
-    // porty / piny (kolejność kanałów)
+    // 端口 / 引脚（通道顺序）
     void init(GPIO_TypeDef* const* GPIO_SCL_port, const uint16_t* GPIO_SCL_pin,
               GPIO_TypeDef* const* GPIO_SDA_port, const uint16_t* GPIO_SDA_pin,
               int num);
@@ -27,7 +27,7 @@ public:
     void updata_stu();
     void updata_angle();
 
-    // Public (1:1)
+    // 公开成员（一一对应）
     bool*               online;       // [numbers]
     _AS5600_magnet_stu* magnet_stu;   // [numbers]
     uint16_t*           raw_angle;    // [numbers]
@@ -37,7 +37,7 @@ public:
 private:
     static constexpr int kMax = 4;
 
-    // Bufory statyczne
+    // 静态缓冲区
     bool               online_buf[kMax];
     _AS5600_magnet_stu magnet_buf[kMax];
     uint16_t           raw_buf[kMax];
@@ -49,7 +49,7 @@ private:
     uint16_t           pin_SDA_buf[kMax];
     uint16_t           pin_SCL_buf[kMax];
 
-    // Wewnętrzne wskaźniki
+    // 内部指针
     int*          error;
     GPIO_TypeDef** port_SDA;
     GPIO_TypeDef** port_SCL;
@@ -66,12 +66,12 @@ private:
     void read_reg8(uint8_t reg);
     void read_reg16(uint8_t reg);
 
-    // helpery WCH
+    // WCH 辅助函数
     void enable_gpio_clock(GPIO_TypeDef* p);
     void sda_mode_ipu(int i); // INPUT_PULLUP
     void sda_mode_od(int i);  // OUTPUT_OD
 
-    // SET_H/SET_L 1:1 (maskuje error[i])
+    // SET_H/SET_L 一一对应（屏蔽 error[i]）
     void set_h(GPIO_TypeDef* const* port, const uint16_t* pin);
     void set_l(GPIO_TypeDef* const* port, const uint16_t* pin);
 };
