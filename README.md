@@ -14,16 +14,22 @@
 
 ## 本仓库版本说明（v1.0-baseline）
 
-本仓库使用标签 **`v1.0-baseline`**（提交 `57bb0f8`）标记了一份**文档基线版本**，方便后续改乱代码时一键回退到当前状态。
+本仓库使用标签 **`v1.0-baseline`** 标记了一份**基线版本**，方便后续改乱代码时一键回退到当前状态。
 
-该版本相对上游仅做了**文档与注释层面的改动**，固件逻辑未动：
+该基线相对上游包含以下改动：
 
+- **源码编译修复**：将 `BMCU_SOFT_LOAD` / `BMCU_DM_TWO_MICROSWITCH` / `BMCU_ONLINE_LED_FILAMENT_RGB` 的 `#if X` 改为防御式 `#if defined(X) && (X + 0)`，缺省/空定义时按关闭处理，修复 `#if with no expression` 编译错误，原脚本与手动 `pio run -e fw` 亦可正常编译。
+- **新增 soft_load(A1) 全量编译脚本** [`build_all_firmwares_softload.sh`](./build_all_firmwares_softload.sh)：在原脚本基础上补充 soft_load(A1) 模式，三种模式格式统一。
+- **新增 [`编译指南.md`](./编译指南.md)**：说明单变体编译、手动传参与扩展全量脚本（**如何编译请见该文档**）。
 - 源码注释与 README 已全量翻译为中文
 - 新增 [`BMCU开发说明.md`](./BMCU开发说明.md)，涵盖：
   - 项目功能与软件架构（总线层 / ams 层 / 运动层解耦）
   - 通讯协议详解：物理层（RS485 1.25 Mbps / 9E1）、BambuBus（`0x3D`）与 AHUB（`0x33`）帧格式、CRC 算法
   - 换料状态机、Flash 持久化、构建变体说明
 - 所有协议/实现结论均标注了对应源码文件与函数名
+- `which_to_choose_*.txt` 翻译为中文
+
+> 注意：预编译固件不再入库，改由 **GitHub Releases** 发布。请使用 `bash build_all_firmwares_softload.sh` 自行构建，或直接从 Releases 下载。
 
 回退方式：
 
@@ -123,7 +129,20 @@ https://github.com/jarczakpawel/BambuStudio-BMCU
 请从 **“Releases”** 栏目（GitHub 页面右侧）下载可直接使用的固件。
 所有固件变体都会在那里生成，并附带 **.txt 说明文档**，告诉你应该选择哪个构建版本。
 
-先选择对应的打印机模式文件夹（standard(A1) 或 high_force_load(P1S)），然后像往常一样选择 AUTOLOAD / RGB / slots。
+先选择对应的打印机模式文件夹（standard(A1) / soft_load(A1) / high_force_load(P1S)），然后像往常一样选择 AUTOLOAD / RGB / slots。
+
+## 从源码编译
+
+预编译固件改由 **Releases** 发布，仓库内不再包含 `.bin`。如需自行构建全部变体：
+
+```bash
+bash build_all_firmwares_softload.sh
+```
+
+该脚本会生成 `firmwares/` 目录，包含三种模式（standard(A1) / soft_load(A1) / high_force_load(P1S)）下各 AUTOLOAD / RGB / slots 组合。
+
+- 单变体编译、手动 `pio run -e fw` 传参、脚本参数说明，详见 **[`编译指南.md`](./编译指南.md)**。
+- 编译产物 `firmwares/` 已被 `.gitignore` 忽略，不会被误提交。
 
 ## 刷写
 
