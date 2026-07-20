@@ -13,7 +13,7 @@ TXT_MODE="which_to_choose_mode.txt"
 TXT_AUTOLOAD="which_to_choose_autoload.txt"
 TXT_RGB="which_to_choose_filament_rgb.txt"
 TXT_SLOTS="which_to_choose_slots.txt"
-OUT_GUIDE="which_to_choose.txt"
+OUT_GUIDE="README.md"
 
 [[ -f "${TXT_MODE}" ]]     || { echo "ERROR: brak ${TXT_MODE}"; exit 1; }
 [[ -f "${TXT_AUTOLOAD}" ]] || { echo "ERROR: brak ${TXT_AUTOLOAD}"; exit 1; }

@@ -141,8 +141,14 @@ bash build_all_firmwares_softload.sh
 
 该脚本会生成 `firmwares/` 目录，包含三种模式（standard(A1) / soft_load(A1) / high_force_load(P1S)）下各 AUTOLOAD / RGB / slots 组合。
 
-- 单变体编译、手动 `pio run -e fw` 传参、脚本参数说明，详见 **[`编译指南.md`](./编译指南.md)**。
-- 编译产物 `firmwares/` 已被 `.gitignore` 忽略，不会被误提交。
+单独补编某一个固件（不跑全量）用 `build_one.sh`，产物放在独立的 `single_build/` 目录，例如：
+
+```bash
+bash build_one.sh softload 1 0 A 0.30   # single_build/soft_load(A1)/AUTOLOAD/FILAMENT_RGB_OFF/AMS_A/ams_a_0.30f.bin
+```
+
+- 单变体编译、手动 `pio run -e fw` 传参、`build_one.sh` 参数说明，详见 **[`编译指南.md`](./编译指南.md)**。
+- 编译产物 `firmwares/`（全量）与 `single_build/`（单固件）均已被 `.gitignore` 忽略，不会入库，最终通过 **Releases** 发布。
 
 ## 刷写
 

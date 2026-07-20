@@ -4,3 +4,6 @@
 
 # ===== 编译好的固件（通过 GitHub Releases 发布，不入库）=====
 firmwares/
+
+# ===== 单独编译（build_one.sh）产物，独立文件夹，不入库 =====
+single_build/

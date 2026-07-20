@@ -7,7 +7,7 @@
 #   1. 新增第三种模式 soft_load(A1)，编译参数为 DBMCU_P1S=0 + BMCU_SOFT_LOAD=1
 #   2. 各层 README.md 为对应 which_to_choose_*.txt 的改名副本（还原作者做法：
 #      现有 firmwares/ 里的 README.md 实为选型指南 txt 改名，并非根目录主文档）
-#   3. 三种模式格式统一：每个模式各层同时生成 which_to_choose.txt + README.md
+#   3. 三种模式格式统一：每个模式各层仅生成 README.md（不再生成 which_to_choose.txt 副本）
 #
 # 用法： bash build_all_firmwares_softload.sh
 # 注意：开头会 rm -rf firmwares 后重建，原有 firmwares/ 内容将被覆盖。
@@ -25,7 +25,7 @@ TXT_MODE="which_to_choose_mode.txt"
 TXT_AUTOLOAD="which_to_choose_autoload.txt"
 TXT_RGB="which_to_choose_filament_rgb.txt"
 TXT_SLOTS="which_to_choose_slots.txt"
-OUT_GUIDE="which_to_choose.txt"
+OUT_GUIDE="README.md"
 
 [[ -f "${TXT_MODE}" ]]     || { echo "ERROR: 缺少 ${TXT_MODE}"; exit 1; }
 [[ -f "${TXT_AUTOLOAD}" ]] || { echo "ERROR: 缺少 ${TXT_AUTOLOAD}"; exit 1; }
@@ -80,7 +80,7 @@ for entry in "${MODES[@]}"; do
   mode_base="${OUT_DIR}/${mode_dir}"
   mkdir -p "${mode_base}"
 
-  # 模式层：autoload 选型指南（同时另存为 which_to_choose.txt，与 README.md 统一）
+  # 模式层：autoload 选型指南（仅保留 README.md）
   cp -f "${TXT_AUTOLOAD}" "${mode_base}/README.md"
   cp -f "${TXT_AUTOLOAD}" "${mode_base}/${OUT_GUIDE}"
 
