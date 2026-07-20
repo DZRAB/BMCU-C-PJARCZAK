@@ -4,62 +4,60 @@
 | |_) | |  | || |___ | |_| |
 |____/|_|  |_| \____| \___/
 
-
-Which firmware folder should I choose here?
-Choose between: soft_load(A1), standard(A1) or high_force_load(P1S)
+我该选哪个固件文件夹？
+在以下三者中选择：soft_load(A1)、standard(A1) 或 high_force_load(P1S)
 
 --------------------------------------------------------------------------
 
 standard(A1)
-- Recommended for: Bambu Lab A1 (and most other setups) where filament does NOT require high pushing force to load.
-- Choose this if: the PTFE tube between the BMCU and the printer is short and relatively straight (low friction).
-- Goal: normal load force and standard pressure behavior.
+- 推荐用于：Bambu Lab A1（以及大多数其他配置），即 filament 装入不需要很大推力的情况。
+- 如果你的 BMCU 到打印机之间的 PTFE 管较短且较直（摩擦小），选这个。
+- 目标：正常的装入力与标准压力行为。
 
 high_force_load(P1S)
-- Recommended for: Bambu Lab P1S (and similar printers/setups) where PTFE routing is long and has multiple bends.
-- This mode uses: much stronger motor force during filament loading, and slightly higher pressure/holding behavior during printing to compensate for higher friction.
-- Choose this if:
-  - you have a P1S (typical long, curved PTFE path), or
-  - your PTFE path is long/complex (many bends), even on A1, or
-  - you experience loading problems such as rejected/failed load events (most commonly caused by too little pushing force during loading).
+- 推荐用于：Bambu Lab P1S（以及类似的打印机/配置），即 PTFE 路径长且有多处弯折的情况。
+- 此模式在装入 filament 时使用强得多的电机力，并在打印期间使用略高的压力/保持行为，以补偿更高的摩擦。
+- 选它的条件：
+  - 你有 P1S（典型的长而弯曲的 PTFE 路径），或
+  - 你的 PTFE 路径长/复杂（多处弯折），即使在 A1 上，或
+  - 你遇到装入问题，例如装入被拒绝/失败（最常见原因是装入时推力太小）。
 
 soft_load(A1)
-- Recommended for: A1 / A1 Mini users only.
-- This mode uses: lower filament loading force than standard(A1).
-- Designed for: some BMCU units that use weaker spring variants and therefore do not hold the filament strongly enough during loading, which can cause clicking/grinding noises.
-- Choose this if:
-  - you use an A1 or A1 Mini, and
-  - you hear grinding/clicking during filament loading, and
-  - you want to reduce BMCU wear.
-- Important:
-  - The best solution is still to replace the lever pressure spring with a stronger one.
-  - If needed, you can use this firmware package with reduced loading force instead.
-- Warning:
-  - This mode may cause loading issues, including the printer rejecting the filament because the pushing force is too weak.
-  - If that happens, please do NOT report loading problems when using this firmware set.
-  - In such a case, switch back to standard(A1) and use a stronger pressure spring.
-- Additional note:
-  - Some users have absolutely no loading problems with this version.
-  - In general, BMCU is less stressed on this mode, so if everything works correctly, it is perfectly fine to keep using it.
-  - For example, on my own A1 Mini this mode works extremely well, and this is the version I personally use.
+- 仅推荐用于：A1 / A1 Mini 用户。
+- 此模式使用比 standard(A1) 更低的 filament 装入力。
+- 面向：某些使用较弱弹簧型号的 BMCU 单元，装入时夹持力不足，可能产生咔哒/打磨噪声。
+- 选它的条件：
+  - 你使用 A1 或 A1 Mini，且
+  - 装入 filament 时听到打磨/咔哒声，且
+  - 你想降低 BMCU 磨损。
+- 重要：
+  - 最佳方案仍是把杠杆压力弹簧换成更强的。
+  - 必要时可用这套降低装入力的固件替代。
+- 警告：
+  - 此模式可能导致装入问题，包括打印机因推力过弱而拒绝 filament。
+  - 如果发生这种情况，请不要就装入问题提交 bug 报告。
+  - 此时请切回 standard(A1) 并使用更强的压力弹簧。
+- 补充说明：
+  - 有些用户用这个版本完全没问题。
+  - 一般来说此模式下 BMCU 受力更小，若一切正常，完全可以继续使用。
+  - 例如我自己的 A1 Mini 上这个模式表现极好，也是我个人在用的版本。
 
-If you're unsure:
-- Start with standard(A1).
-- If loading is inconsistent or gets rejected, switch to high_force_load(P1S).
-- If you use an A1 / A1 Mini and hear grinding during loading, try soft_load(A1).
+如果不确定：
+- 从 standard(A1) 开始。
+- 如果装入不稳定或被拒绝，切到 high_force_load(P1S)。
+- 如果你用 A1 / A1 Mini 且装入时听到打磨声，试试 soft_load(A1)。
 
 --------------------------------------------------------------------------
 
 
-[::] All modifications by Pawel Jarczak
-[::] Also thanks to everyone on Reddit who tested this firmware on many different BMCU 370C builds.
-[::] Special thanks to Remote-Trash4593 (Reddit) for the huge effort: extensive testing + detailed documentation.
+[::] 所有修改由 Pawel Jarczak 完成
+[::] 同时感谢 Reddit 上众多在不同 BMCU 370C 上测试本固件的人。
+[::] 特别感谢 Remote-Trash4593（Reddit）的巨大付出：大量测试 + 详尽文档。
 
-[::] May compatibility with BambuLab last as long as possible.
-[::] If they ever block this last lifeboat:
-[::] - We should sell our printers and switch brands, defending our right to ownership and choice.
-[::] - When many of us bought these printers, BMCU was supported without restrictions; limits appeared only after purchase.
-[::] - BMCU was a key reason to buy; for many people AMS is too big, too expensive, and still has plenty of issues.
-[::] - The market is full of amazing 3D printers that do not lock users out - and for many of us, a 3D printer is a critical work tool.
-[::] - Open BMCU firmware gives us real freedom, and we should demand that freedom be respected.
-
+[::] 愿与 BambuLab 的兼容性尽可能长久。
+[::] 如果他们最终封锁这最后的生命线：
+[::] - 我们应该卖掉打印机并换品牌，捍卫我们的所有权与选择权。
+[::] - 我们许多人购买这些打印机时，BMCU 是不受限制支持的；限制是在购买后才出现的。
+[::] - BMCU 曾是购买的关键理由；对许多人来说 AMS 太大、太贵，且仍有不少问题。
+[::] - 市场上有大量不会把用户拒之门外的优秀 3D 打印机——对我们许多人来说，3D 打印机是关键的生产工具。
+[::] - 开源 BMCU 固件给了我们真正的自由，我们应该要求这种自由受到尊重。

@@ -4,47 +4,43 @@
 | |_) | |  | || |___ | |_| |
 |____/|_|  |_| \____| \___/
 
-
-Which variant should I choose?
-Choose between: FILAMENT_RGB_ON and FILAMENT_RGB_OFF.
+我该选哪个变体？
+在 FILAMENT_RGB_ON 和 FILAMENT_RGB_OFF 之间选择。
 
 FILAMENT_RGB_ON
-- After a filament is loaded, the front LED (per channel) lights up in the selected filament color.
-- The LED still reacts to buffer status (pressure) as usual.
+- filament 装入后，前 LED（每通道）以所选 filament 颜色亮起。
+- LED 仍照常对 buffer 状态（压力）作出反应。
 
 FILAMENT_RGB_OFF
-- Filament color display is disabled.
-- The front LED only indicates buffer status:
-  - centered/neutral position (when no filament is loaded),
-  - buffer extremes (too much / too little pressure).
+- 关闭 filament 颜色显示。
+- 前 LED 仅指示 buffer 状态：
+  - 居中/中性位置（未装入 filament 时），
+  - buffer 极端（压力过大/过小）。
 
+--------------------------------------------------------------------------
+
+FILAMENT_RGB_ON 的工作原理
+
+- 当固件认为某通道"已装入"filament 时，该通道的前 LED 被设为
+  该槽位上报/存储的 filament 颜色。
+- RGB LED 在不同模块间可能有差异：每个 LED 的红/绿/蓝亮度平衡可能不同，
+  因此同一 filament 颜色在不同通道/模块上看起来可能略有不同。
+- 颜色可能相当亮，会分散注意力（尤其在夜间房间内）。
+  如果你想要安静/无灯环境，请选 FILAMENT_RGB_OFF。
+
+没有其他行为变化——此选项仅影响前 LED。
 
 --------------------------------------------------------------------------
 
 
-How FILAMENT_RGB_ON works
+[::] 所有修改由 Pawel Jarczak 完成
+[::] 同时感谢 Reddit 上众多在不同 BMCU 370C 上测试本固件的人。
+[::] 特别感谢 Remote-Trash4593（Reddit）的巨大付出：大量测试 + 详尽文档。
 
-- When the firmware considers the filament "loaded" on a channel, the front LED for that channel is set
-  to the filament color reported/stored for that slot.
-- RGB LEDs can vary between modules: each LED may have different brightness balance for Red/Green/Blue,
-  so the same filament color may look slightly different on different channels/modules.
-- The colors can be quite bright, which may be distracting (especially at night in a room).
-  If you want a calm/no-light setup, choose FILAMENT_RGB_OFF instead.
-
-No other behavior changes - this option only affects the front LED.
-
-
---------------------------------------------------------------------------
-
-
-[::] All modifications by Pawel Jarczak
-[::] Also thanks to everyone on Reddit who tested this firmware on many different BMCU 370C builds.
-[::] Special thanks to Remote-Trash4593 (Reddit) for the huge effort: extensive testing + detailed documentation.
-
-[::] May compatibility with BambuLab last as long as possible.
-[::] If they ever block this last lifeboat:
-[::] - We should sell our printers and switch brands, defending our right to ownership and choice.
-[::] - When many of us bought these printers, BMCU was supported without restrictions; limits appeared only after purchase.
-[::] - BMCU was a key reason to buy; for many people AMS is too big, too expensive, and still has plenty of issues.
-[::] - The market is full of amazing 3D printers that do not lock users out - and for many of us, a 3D printer is a critical work tool.
-[::] - Open BMCU firmware gives us real freedom, and we should demand that freedom be respected.
+[::] 愿与 BambuLab 的兼容性尽可能长久。
+[::] 如果他们最终封锁这最后的生命线：
+[::] - 我们应该卖掉打印机并换品牌，捍卫我们的所有权与选择权。
+[::] - 我们许多人购买这些打印机时，BMCU 是不受限制支持的；限制是在购买后才出现的。
+[::] - BMCU 曾是购买的关键理由；对许多人来说 AMS 太大、太贵，且仍有不少问题。
+[::] - 市场上有大量不会把用户拒之门外的优秀 3D 打印机——对我们许多人来说，3D 打印机是关键的生产工具。
+[::] - 开源 BMCU 固件给了我们真正的自由，我们应该要求这种自由受到尊重。

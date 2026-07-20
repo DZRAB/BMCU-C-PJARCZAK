@@ -4,77 +4,68 @@
 | |_) | |  | || |___ | |_| |
 |____/|_|  |_| \____| \___/
 
-
-Which firmware folder should I choose here?
-Choose between: SOLO, AMS_A, AMS_B, AMS_C, AMS_D.
-
+我该选哪个固件文件夹？
+在 SOLO、AMS_A、AMS_B、AMS_C、AMS_D 之间选择。
 
 --------------------------------------------------------------------------
 
-
-SOLO firmware
-Example file:
+SOLO 固件
+示例文件：
 - solo_0.095f.bin
 
-This firmware is intended for single-BMCU (SOLO) operation.
-Recommended for single-BMCU setups.
+此固件用于单 BMCU（SOLO）运行。
+推荐用于单 BMCU 配置。
 
-Filament retraction length:
+filament 回抽长度：
 - 0.095 m = 9.5 cm
 
+AMS_A / AMS_B / AMS_C / AMS_D 固件
+这些固件用于：
+- 多 BMCU 配置和更长的 filament 回抽距离。
 
-AMS_A / AMS_B / AMS_C / AMS_D firmware
-These firmware versions are intended for:
-- multi-BMCU setups and longer filament retraction distances.
+如果你只有一台 BMCU，但需要比 SOLO 更长的回抽，
+用 AMS_A 代替 SOLO。
 
-If you have ONLY ONE BMCU but you need longer retraction than SOLO provides,
-use AMS_A instead of SOLO.
-
-
-Retraction length in filenames
-Examples:
+文件名中的回抽长度
+示例：
 - ams_a_0.10f.bin  -> 0.10 m = 10 cm
 - ams_a_0.50f.bin  -> 0.50 m = 50 cm
-The number is the retraction length in meters.
+数字即回抽长度（单位：米）。
 
+多 BMCU 配置（2-4 台）
+每台 BMCU 必须使用不同的 AMS 槽位固件：
+- 第 1 台：AMS_A
+- 第 2 台：AMS_B
+- 第 3 台：AMS_C
+- 第 4 台：AMS_D
 
-Multi-BMCU setups (2-4 unit)
-Each BMCU must have a different AMS slot firmware:
-- 1st unit: AMS_A
-- 2nd unit: AMS_B
-- 3rd unit: AMS_C
-- 4th unit: AMS_D
+如何选择正确的回抽长度（简法）
+回抽长度必须从打印机内部 AMS 分线器末端算起
+（即最多四根 PTFE 管插入的那个 AMS 塑料部件）。
 
+示例：
+- 到 AMS 分线器末端的距离：约 9.0 cm
+- SOLO 回抽约 9.5 cm，因此它会越过分线器约 0.5 cm
 
-How to choose the correct retraction length (simple)
-Retraction must be calculated from the end of the AMS splitter inside the printer
-(the plastic AMS part where up to four PTFE tubes enter).
+计算自己的回抽长度时：
+- 始终从 AMS 分线器末端起算
+- 加一点安全余量，使 filament 能清过器分线器
 
-Example:
-- Distance to the end of the AMS splitter: about 9.0 cm
-- SOLO retracts about 9.5 cm, so it goes about 0.5 cm past the splitter
-
-When calculating your own retraction length:
-- Always measure from the end of the AMS splitter
-- Add a small safety margin so the filament clears the splitter
-
-Note for P1 printers:
-- Many P1 setups use longer PTFE paths, so a longer retraction is often needed.
-- Even with a single BMCU, AMS_A is often a better choice than SOLO (pick your needed length).
-
+P1 打印机提示：
+- 许多 P1 配置使用更长的 PTFE 路径，因此常需要更长的回抽。
+- 即使只有一台 BMCU，AMS_A 通常也比 SOLO 更合适（选你所需长度）。
 
 --------------------------------------------------------------------------
 
 
-[::] All modifications by Pawel Jarczak
-[::] Also thanks to everyone on Reddit who tested this firmware on many different BMCU 370C builds.
-[::] Special thanks to Remote-Trash4593 (Reddit) for the huge effort: extensive testing + detailed documentation.
+[::] 所有修改由 Pawel Jarczak 完成
+[::] 同时感谢 Reddit 上众多在不同 BMCU 370C 上测试本固件的人。
+[::] 特别感谢 Remote-Trash4593（Reddit）的巨大付出：大量测试 + 详尽文档。
 
-[::] May compatibility with BambuLab last as long as possible.
-[::] If they ever block this last lifeboat:
-[::] - We should sell our printers and switch brands, defending our right to ownership and choice.
-[::] - When many of us bought these printers, BMCU was supported without restrictions; limits appeared only after purchase.
-[::] - BMCU was a key reason to buy; for many people AMS is too big, too expensive, and still has plenty of issues.
-[::] - The market is full of amazing 3D printers that do not lock users out - and for many of us, a 3D printer is a critical work tool.
-[::] - Open BMCU firmware gives us real freedom, and we should demand that freedom be respected.
-
+[::] 愿与 BambuLab 的兼容性尽可能长久。
+[::] 如果他们最终封锁这最后的生命线：
+[::] - 我们应该卖掉打印机并换品牌，捍卫我们的所有权与选择权。
+[::] - 我们许多人购买这些打印机时，BMCU 是不受限制支持的；限制是在购买后才出现的。
+[::] - BMCU 曾是购买的关键理由；对许多人来说 AMS 太大、太贵，且仍有不少问题。
+[::] - 市场上有大量不会把用户拒之门外的优秀 3D 打印机——对我们许多人来说，3D 打印机是关键的生产工具。
+[::] - 开源 BMCU 固件给了我们真正的自由，我们应该要求这种自由受到尊重。

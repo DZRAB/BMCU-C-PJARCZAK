@@ -4,61 +4,55 @@
 | |_) | |  | || |___ | |_| |
 |____/|_|  |_| \____| \___/
 
-
-Which variant should I choose?
-Choose between: AUTOLOAD and NO_AUTOLOAD.
+我该选哪个变体？
+在 AUTOLOAD 和 NO_AUTOLOAD 之间选择。
 
 AUTOLOAD
-- Designed for BMCU 370C DM (dual microswitch).
-- Can be used on ANY BMCU 370C version (including single-switch boards).
-  On single-switch boards, Stage 1 is manual, Stage 2 works the same.
+- 为 BMCU 370C DM（双微动开关）设计。
+- 可用于任何 BMCU 370C 版本（包括单开关板）。
+  在单开关板上，第一阶段为手动，第二阶段行为相同。
 
 NO_AUTOLOAD
-- No autoload. You must push the filament manually until you can see it in the PTFE tube.
-- Safer/simpler logic, but requires more work during loading.
-- Can be used on ANY BMCU 370C version (dual-switch DM and single-switch boards).
+- 无自动装入。你必须手动把 filament 推到能在 PTFE 管里看到它为止。
+- 逻辑更安全/简单，但装入时需要更多人工操作。
+- 可用于任何 BMCU 370C 版本（双开关 DM 和单开关板）。
 
+--------------------------------------------------------------------------
+
+AUTOLOAD 的工作原理
+
+第一阶段（仅 DM：引导 filament 穿过挤出机）
+- DM 板有两个微动开关（挤出机前一个 + 挤出机后一个）。
+- 一旦 filament 触碰到 BMCU 并触发第一个开关，AUTOLOAD 启动。
+- 你可能需要用手轻轻推一下 filament，直到挤出机齿轮"咬住"它。
+- 然后 BMCU 自动把 filament 送过挤出机，直到第二个开关（挤出机后方）被触发。
+  这就是"完全检测到/完全进入"状态（两个开关都触发）。
+
+第二阶段（送入可打印状态 + 保护）
+- 确认"完全进入"后，BMCU 再向前送约 12 cm（120 mm）filament。
+- 这完成整个穿过 BMCU 的过程，使 filament 就位、可打印。
+- 送入期间监控 buffer 位置。如果 filament 卡在 buffer 外壳或 PTFE 管边缘（buffer 上升过多），它会保护机构：
+  - 回抽到安全的 buffer 位置，
+  - 重试（最多 2 次）。
+- 第 3 次卡住（最终失败）时，它会进一步回抽，把 filament 退出并停止。
+  需要人工干预。
+
+单开关板
+- 仍可使用 AUTOLOAD，但第一阶段必须手动完成：
+  因为没有第二个开关（挤出机后方）来确认"完全进入"状态，你需要手动把 filament 装入挤出机。
+- 一旦 filament 完全进入挤出机，第二阶段行为相同。
 
 --------------------------------------------------------------------------
 
 
-How AUTOLOAD works
+[::] 所有修改由 Pawel Jarczak 完成
+[::] 同时感谢 Reddit 上众多在不同 BMCU 370C 上测试本固件的人。
+[::] 特别感谢 Remote-Trash4593（Reddit）的巨大付出：大量测试 + 详尽文档。
 
-Stage 1 (DM only: guided entry through the extruder)
-- DM boards have TWO microswitches (one before the extruder + one after the extruder).
-- As soon as the filament touches the BMCU and triggers the first switch, AUTOLOAD starts.
-- You may need to push the filament lightly by hand until the extruder gears "grab" it.
-- Then the BMCU feeds the filament automatically through the extruder until the SECOND switch
-  (behind the extruder) is reached. This is the "fully detected / fully in" condition (both switches).
-
-Stage 2 (Print-ready feed with protection)
-- After "fully in" is confirmed, the BMCU feeds about 12 cm (120 mm) of filament forward.
-- This completes the full pass through the BMCU so the filament is seated and ready for printing.
-- During this feed it monitors the buffer position. If the filament snags on the buffer housing or the
-  PTFE tube edge (buffer rises too much), it protects the mechanism:
-  - retracts to a safe buffer position,
-  - tries again (up to 2 retries).
-- On the 3rd snag (final failure) it retracts further, backs the filament out, and stops.
-  Manual intervention is required.
-
-Single-switch boards
-- AUTOLOAD can still be used, but Stage 1 must be done manually:
-  you need to load the filament into the extruder by hand because there is no second switch
-  (behind the extruder) to confirm the "fully in" condition.
-- Once the filament is fully in the extruder, Stage 2 works the same.
-
-
---------------------------------------------------------------------------
-
-
-[::] All modifications by Pawel Jarczak
-[::] Also thanks to everyone on Reddit who tested this firmware on many different BMCU 370C builds.
-[::] Special thanks to Remote-Trash4593 (Reddit) for the huge effort: extensive testing + detailed documentation.
-
-[::] May compatibility with BambuLab last as long as possible.
-[::] If they ever block this last lifeboat:
-[::] - We should sell our printers and switch brands, defending our right to ownership and choice.
-[::] - When many of us bought these printers, BMCU was supported without restrictions; limits appeared only after purchase.
-[::] - BMCU was a key reason to buy; for many people AMS is too big, too expensive, and still has plenty of issues.
-[::] - The market is full of amazing 3D printers that do not lock users out - and for many of us, a 3D printer is a critical work tool.
-[::] - Open BMCU firmware gives us real freedom, and we should demand that freedom be respected.
+[::] 愿与 BambuLab 的兼容性尽可能长久。
+[::] 如果他们最终封锁这最后的生命线：
+[::] - 我们应该卖掉打印机并换品牌，捍卫我们的所有权与选择权。
+[::] - 我们许多人购买这些打印机时，BMCU 是不受限制支持的；限制是在购买后才出现的。
+[::] - BMCU 曾是购买的关键理由；对许多人来说 AMS 太大、太贵，且仍有不少问题。
+[::] - 市场上有大量不会把用户拒之门外的优秀 3D 打印机——对我们许多人来说，3D 打印机是关键的生产工具。
+[::] - 开源 BMCU 固件给了我们真正的自由，我们应该要求这种自由受到尊重。
