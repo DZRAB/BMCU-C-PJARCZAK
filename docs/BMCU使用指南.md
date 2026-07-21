@@ -17,7 +17,7 @@ BMCU-C 是 **Bambu Lab AMS（自动多色换料系统）的开源替代固件**�
 
 ## 2. 固件选型（这么多固件是干嘛的）
 
-仓库提供大量固件变体，是因为装入力、自动装载、LED、槽位、回抽长度都需要按你的硬件与打印机组合来定。变体按下面四个维度组合，对应 `firmwares/` 目录树（由 `build_all_firmwares_softload.sh` 生成，或从 **GitHub Releases** 下载）。
+仓库提供大量固件变体，是因为装入力、自动装载、LED、槽位、回抽长度都需要按你的硬件与打印机组合来定。变体按下面四个维度组合，对应 `firmwares/` 目录树（由 `build_all_firmwares_softload.sh` 或 `build_all_firmwares_fast.py` 生成，二者输出完全一致；或从 **GitHub Releases** 下载）。
 
 > 每个维度的详细选型理由见仓库根目录 `which_to_choose_*.txt`（编译时会复制到对应目录层）。下面只给结论速查。
 
@@ -66,7 +66,7 @@ BMCU-C 是 **Bambu Lab AMS（自动多色换料系统）的开源替代固件**�
 - 打印机必须配置为 **AMS**，而不是 **AMS Lite**；使用 AMS Lite 会导致兼容性问题。
 - Bambu Lab 正通过固件更新限制本地 BMCU 的互通性，详见 [`bmcu-vs-firmware-locks.md`](./bmcu-vs-firmware-locks.md)。
 - 打印机启动会报 **HMS 警告**（来自心跳握手），属已知可接受行为，**不阻断打印**。
-- **打印机固件版本**：当前 BMCU 固件最高兼容打印机固件 **1.07.00**；建议将打印机固件降到 **1.07.00 之前** 的版本，以获得最佳兼容性与稳定性。Bambu 后续固件更新可能进一步收紧互通性，详见 [`bmcu-vs-firmware-locks.md`](./bmcu-vs-firmware-locks.md)。
+- **打印机固件版本**：当前 BMCU 固件最高兼容打印机固件 **1.07.00**（即 Bambu 版本号 `01.07.00.00` 的简写，详见 [`bmcu-vs-firmware-locks.md`](./bmcu-vs-firmware-locks.md) 第 4 节写法说明）；建议将打印机固件降到 **1.07.00 之前** 的版本，以获得最佳兼容性与稳定性。Bambu 后续固件更新可能进一步收紧互通性，详见 [`bmcu-vs-firmware-locks.md`](./bmcu-vs-firmware-locks.md)。
 
 ---
 
