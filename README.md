@@ -172,6 +172,8 @@ bash build_all_firmwares_softload.sh
 
 该脚本会生成 `firmwares/` 目录，包含三种模式（standard(A1) / soft_load(A1) / high_force_load(P1S)）下各 AUTOLOAD / RGB / slots 组合。
 
+> 如需更快的本地全量编译（780 个固件约 1 分钟，常规脚本需数小时），可用 [`build_all_firmwares_fast.py`](./build_all_firmwares_fast.py)（详见 [`编译指南.md`](./docs/编译指南.md) 第四节）。
+
 单独补编某一个固件（不跑全量）用 `build_one.sh`，产物放在独立的 `single_build/` 目录，例如：
 
 ```bash
@@ -185,6 +187,9 @@ bash build_one.sh softload 1 0 A 0.30   # single_build/soft_load(A1)/AUTOLOAD/FI
 
 > [!WARNING]
 > 下面「BMCU Flasher」的说明适用于**原作者原版固件**。本仓库（BMCU-C）的二次开发固件**不支持 BMCU Flasher**，请用 **WCHISPTool** 烧录（方法见 [`BMCU使用指南.md`](./docs/BMCU使用指南.md) 与 [`编译指南.md`](./docs/编译指南.md) 的刷写章节）。
+
+<details>
+<summary>原作者原版固件刷写方式（BMCU Flasher，本仓库 BMCU-C 固件不适用）</summary>
 
 要在以下任意系统上刷写任何版本的 BMCU（USB 或 TTL）：
 
@@ -209,6 +214,8 @@ https://github.com/jarczakpawel/BMCU-Flasher
 - **本地刷写**：使用你自己下载的固件文件。
 
 该刷写工具还支持 **Android**，因此你甚至可以直接用**手机**刷写 BMCU 🙂
+
+</details>
 
 重要提示：
 - 当 BMCU 连接到打印机时，**不要**刷写它。
