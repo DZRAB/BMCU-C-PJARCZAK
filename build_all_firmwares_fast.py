@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-BMCU 固件批量编译脚本（高速版 · 适配本仓库 BMCU-C）
+BMCU 固件高速批量编译工具（适配本仓库 BMCU-C）
 
-设计目标（与 build_all_firmwares_softload.sh 完全一致的输出，但快 1~2 个数量级）：
-  - 输出目录结构 / 文件名 与 build_all_firmwares_softload.sh 完全相同
-    （standard(A1) / high_force_load(P1S) / soft_load(A1)
-     → AUTOLOAD|NO_AUTOLOAD → FILAMENT_RGB_ON|OFF → SOLO / AMS_A..D）
-  - 精准计时（分阶段）与具体固件数量报告
+在保持与 build_all_firmwares_softload.sh 完全一致的输出目录结构、文件命名与
+manifest.txt 校验清单的前提下，将约 780 个固件的编译时间从数十分钟缩短到约 1 分钟以内。
 
-加速原理（参考朋友的快速编译脚本）：
-  1. pio run -e moj -v 提取工具链路径与编译/链接命令行（带缓存，二次运行跳过）
+加速原理：
+  1. pio run -e moj -v 提取工具链路径与编译/链接命令行（带缓存，platformio.ini 未改动时复用）
   2. 预编译所有不受变体宏影响的 .o（Framework SDK + 不变用户源）只编一次
   3. 按 "模式组合" (dm × rgb × p1s × soft_load × ams_num) 编译受宏影响的变体 .o 并缓存复用
   4. AMS_RETRACT_LEN 仅被 Motion_control 使用：用占位符 123.456f 编译基础固件，
