@@ -31,6 +31,13 @@
 | [`编译指南.md`](./编译指南.md) | 编译方法、脚本与变体宏定义 |
 | [`bmcu-vs-firmware-locks.md`](./bmcu-vs-firmware-locks.md) | Bambu 固件更新对 BMCU 兼容性的影响 |
 
+## 硬件开源地址
+
+本项目主板（BMCU 370C）的硬件开源工程：
+
+https://oshwhub.com/dzrab/project_drqubaki
+
+
 ## 基线版本：v1.0-baseline
 
 `v1.0-baseline` 是基于原作者 V10.5 整理出的可编译、有文档的干净基线，作为后续开发的起点。相对原作者主要改动：
