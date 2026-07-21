@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
 # build_all_firmwares_softload.sh
-# 在 build_all_firmwares.sh 基础上额外编译 soft_load(A1) 模式。
+# 一键编译全部固件（含 soft_load(A1) 模式），覆盖三种打印机模式：
+#   standard(A1) / high_force_load(P1S) / soft_load(A1)
 #
-# 与原脚本的差异：
-#   1. 新增第三种模式 soft_load(A1)，编译参数为 DBMCU_P1S=0 + BMCU_SOFT_LOAD=1
+# 行为说明：
+#   1. 三种模式全覆盖（DBMCU_P1S=0/1 与 BMCU_SOFT_LOAD=0/1 组合）
 #   2. 各层 README.md 为对应 which_to_choose_*.txt 的改名副本（还原作者做法：
 #      现有 firmwares/ 里的 README.md 实为选型指南 txt 改名，并非根目录主文档）
 #   3. 三种模式格式统一：每个模式各层仅生成 README.md（不再生成 which_to_choose.txt 副本）
