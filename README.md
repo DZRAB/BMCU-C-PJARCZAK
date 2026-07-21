@@ -17,7 +17,7 @@
 - **数据流**：`main.cpp` 主循环每 2 秒非阻塞采样 → 填入 `ams[].filament[].compartment_temperature`（℃）/ `compartment_humidity`（%）→ 现有 ahub / bambu 协议自动上报，无需改协议层。
 - **引脚冲突**：PB10/PB11 原被 USART3 调试串口（TX/RX）占位，但 `Debug_log_on` 未定义时调试串口不初始化，故当前安全；若开启调试输出需另选引脚或关闭 AHT20。
 - **代码位置**：[`src/aht20/aht20.h`](./src/aht20/aht20.h) / [`src/aht20/aht20.cpp`](./src/aht20/aht20.cpp)，集成于 `src/main.cpp`。
-- **编译**：方法见 [`编译指南.md`](./编译指南.md)；预编译固件由 **GitHub Releases** 发布。
+- **编译**：方法见 [`编译指南.md`](./docs/编译指南.md)；预编译固件由 **GitHub Releases** 发布。
 
 ## 相关文档
 
@@ -26,10 +26,10 @@
 | 文档 | 内容 |
 |------|------|
 | [`README.md`](./README.md) | 本文件：版本与功能概览 |
-| [`BMCU使用指南.md`](./BMCU使用指南.md) | 使用：固件选型、刷写、校准、注意事项 |
-| [`BMCU开发说明.md`](./BMCU开发说明.md) | 开发细节：架构、通讯协议、状态机、传感器 |
-| [`编译指南.md`](./编译指南.md) | 编译方法、脚本与变体宏定义 |
-| [`bmcu-vs-firmware-locks.md`](./bmcu-vs-firmware-locks.md) | Bambu 固件更新对 BMCU 兼容性的影响 |
+| [`BMCU使用指南.md`](./docs/BMCU使用指南.md) | 使用：固件选型、刷写、校准、注意事项 |
+| [`BMCU开发说明.md`](./docs/BMCU开发说明.md) | 开发细节：架构、通讯协议、状态机、传感器 |
+| [`编译指南.md`](./docs/编译指南.md) | 编译方法、脚本与变体宏定义 |
+| [`bmcu-vs-firmware-locks.md`](./docs/bmcu-vs-firmware-locks.md) | Bambu 固件更新对 BMCU 兼容性的影响 |
 
 ## 硬件开源地址
 
@@ -44,7 +44,7 @@ https://oshwhub.com/dzrab/project_drqubaki
 
 - **修复编译问题**：将 `BMCU_SOFT_LOAD` / `BMCU_DM_TWO_MICROSWITCH` / `BMCU_ONLINE_LED_FILAMENT_RGB` 的 `#if X` 改为 `#if defined(X) && (X + 0)`，修复 `#if with no expression` 编译错误，使原脚本与手动 `pio run -e fw` 均可正常编译。
 - **新增编译脚本**：`build_all_firmwares_softload.sh`（全量，含 soft_load(A1) 模式）、`build_one.sh`（单固件变体，产物在 `single_build/`）。
-- **新增文档并中文化**：`编译指南.md`（编译说明）、`BMCU开发说明.md`（架构与协议详解）；README 与源码注释翻译为中文，`which_to_choose_*.txt` 翻译为中文。
+- **新增文档并中文化**：`docs/编译指南.md`（编译说明）、`docs/BMCU开发说明.md`（架构与协议详解）；README 与源码注释翻译为中文，`which_to_choose_*.txt` 翻译为中文。
 
 可一键回退到该状态：
 
@@ -63,7 +63,7 @@ git reset --hard v1.0-baseline # 将当前分支强制还原到基线
 > Bambu Lab 正通过固件更新限制本地 BMCU 的互通性。
 >
 > 关于打印机更新如何移除购买时可用功能的说明：
-> [BMCU 与固件锁](./bmcu-vs-firmware-locks.md)
+> [BMCU 与固件锁](./docs/bmcu-vs-firmware-locks.md)
 
 重要提示：
 打印机必须配置为 AMS，而不是 AMS Lite。
@@ -178,13 +178,13 @@ bash build_all_firmwares_softload.sh
 bash build_one.sh softload 1 0 A 0.30   # single_build/soft_load(A1)/AUTOLOAD/FILAMENT_RGB_OFF/AMS_A/ams_a_0.30f.bin
 ```
 
-- 单变体编译、手动 `pio run -e fw` 传参、`build_one.sh` 参数说明，详见 **[`编译指南.md`](./编译指南.md)**。
+- 单变体编译、手动 `pio run -e fw` 传参、`build_one.sh` 参数说明，详见 **[`编译指南.md`](./docs/编译指南.md)**。
 - 编译产物 `firmwares/`（全量）与 `single_build/`（单固件）均已被 `.gitignore` 忽略，不会入库，最终通过 **Releases** 发布。
 
 ## 刷写
 
 > [!WARNING]
-> 下面「BMCU Flasher」的说明适用于**原作者原版固件**。本仓库（BMCU-C）的二次开发固件**不支持 BMCU Flasher**，请用 **WCHISPTool** 烧录（方法见 [`BMCU使用指南.md`](./BMCU使用指南.md) 与 [`编译指南.md`](./编译指南.md) 的刷写章节）。
+> 下面「BMCU Flasher」的说明适用于**原作者原版固件**。本仓库（BMCU-C）的二次开发固件**不支持 BMCU Flasher**，请用 **WCHISPTool** 烧录（方法见 [`BMCU使用指南.md`](./docs/BMCU使用指南.md) 与 [`编译指南.md`](./docs/编译指南.md) 的刷写章节）。
 
 要在以下任意系统上刷写任何版本的 BMCU（USB 或 TTL）：
 
