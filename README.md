@@ -1,25 +1,24 @@
-# BMCU 固件 – 校准与兼容性说明
+# 本仓库版本说明
 
-本 BMCU 固件已针对 Bambu Lab A1 的最新固件进行测试与验证。
+> 本仓库（BMCU-C）基于原作者 **jarczakpawel** 的 BMCU 固件（原作者最新基线 **V10.5**）进行二次开发。本文件顶部为本仓库自己的版本管理说明；原作者原始的校准 / 兼容性 / 更新日志等内容，保留在下方「BMCU 固件 – 校准与兼容性说明（原作者内容 · 保留参考）」一节，供查阅。
 
-> [!WARNING]
-> Bambu Lab 正通过固件更新限制本地 BMCU 的互通性。
->
-> 关于打印机更新如何移除购买时可用功能的说明：
-> [BMCU 与固件锁](./bmcu-vs-firmware-locks.md)
+## 版本简介
 
-重要提示：
-打印机必须配置为 AMS，而不是 AMS Lite。
-使用 AMS Lite 会导致兼容性问题。
+本仓库采用**双版本轴**：
 
-## 本仓库版本说明（v1.0-baseline）
+- **固件兼容版本（打印机看到的）**：保持原作者 **V10.5**，固件向打印机上报的版本号固定为 `10.50`（`bambu_bus_ams.cpp`），不随本仓库迭代改变 → 打印机兼容性识别不变。
+- **本仓库自有版本（git 标签管理）**：
+  - **V1.0 = `v1.0-baseline`**：AHT20 开发前已完结的基线（基于原作者 V10.5）。
+  - **V2.0 = `v2.0-aht20`**：在 V1.0 基础上新增 AHT20 温湿度等功能的版本。
+- 仓库 `version` 文件记为 `10.50.00.00`，即 10.5 基线，保留原作者版本出处。
 
-本仓库使用标签 **`v1.0-baseline`** 标记了一份**基线版本**，方便后续改乱代码时一键回退到当前状态。
+### v1.0-baseline（AHT20 开发前完结）
 
-该基线相对上游包含以下改动：
+标签 **`v1.0-baseline`** 标记了一份**基线版本**，方便后续改乱代码时一键回退到该状态。该基线相对上游（原作者 V10.5）包含以下改动：
 
 - **源码编译修复**：将 `BMCU_SOFT_LOAD` / `BMCU_DM_TWO_MICROSWITCH` / `BMCU_ONLINE_LED_FILAMENT_RGB` 的 `#if X` 改为防御式 `#if defined(X) && (X + 0)`，缺省/空定义时按关闭处理，修复 `#if with no expression` 编译错误，原脚本与手动 `pio run -e fw` 亦可正常编译。
 - **新增 soft_load(A1) 全量编译脚本** [`build_all_firmwares_softload.sh`](./build_all_firmwares_softload.sh)：在原脚本基础上补充 soft_load(A1) 模式，三种模式格式统一。
+- **新增单固件编译脚本** [`build_one.sh`](./build_one.sh)：单独编译某一个固件变体（不跑全量），产物放在独立的 `single_build/` 目录，参数与用法详见 [`编译指南.md`](./编译指南.md)。
 - **新增 [`编译指南.md`](./编译指南.md)**：说明单变体编译、手动传参与扩展全量脚本（**如何编译请见该文档**）。
 - 源码注释与 README 已全量翻译为中文
 - 新增 [`BMCU开发说明.md`](./BMCU开发说明.md)，涵盖：
@@ -38,11 +37,9 @@ git checkout v1.0-baseline     # 查看基线版本
 git reset --hard v1.0-baseline # 将当前分支强制还原到基线
 ```
 
-## AHT20 环境温湿度（本仓库新增功能）
+### v2.0-aht20（含 AHT20 温湿度等新增）
 
-在原作者 **V10.5** 基线基础上，本仓库新增了 **AHT20 温湿度传感器** 支持，用于把 BMCU 所在环境（料箱/机箱）的温湿度上报给打印机。
-
-- **所属版本**：`v2.0-aht20`（基于原作者 V10.5 基线，独立于 `v1.0-baseline`）。
+标签 **`v2.0-aht20`** 在 V1.0 基线基础上新增了 **AHT20 温湿度传感器** 支持，用于把 BMCU 所在环境（料箱/机箱）的温湿度上报给打印机。
 
 - **硬件连接（独立通道，软件 I2C）**：
   - `SCL = PB10`（推挽输出，主设备时钟；AHT20 不拉伸 SCL，推挽安全）
@@ -53,7 +50,21 @@ git reset --hard v1.0-baseline # 将当前分支强制还原到基线
 - **引脚冲突**：PB10/PB11 原被 USART3 调试串口（TX/RX）占位，但 `Debug_log_on` 未定义时调试串口不初始化，故当前安全；若以后开启调试输出需另选引脚或关闭 AHT20。
 - **代码位置**：[`src/aht20/aht20.h`](./src/aht20/aht20.h) / [`src/aht20/aht20.cpp`](./src/aht20/aht20.cpp)，集成于 `src/main.cpp`。
 
-> 版本说明（双版本轴）：本仓库基于原作者 **V10.5** 固件，固件向打印机上报的版本号保持 `10.50`（兼容性识别不变）；仓库 `version` 文件记为 `10.50.00.00`（即 10.5 基线）。我们自己的迭代用独立版本号管理：**V1.0 = `v1.0-baseline` 标签**（AHT20 开发前已完结），**V2.0 = `v2.0-aht20` 标签**（含 AHT20 温湿度等新增功能）。
+---
+
+# BMCU 固件 – 校准与兼容性说明（原作者内容 · 保留做参考）
+
+本 BMCU 固件已针对 Bambu Lab A1 的最新固件进行测试与验证。
+
+> [!WARNING]
+> Bambu Lab 正通过固件更新限制本地 BMCU 的互通性。
+>
+> 关于打印机更新如何移除购买时可用功能的说明：
+> [BMCU 与固件锁](./bmcu-vs-firmware-locks.md)
+
+重要提示：
+打印机必须配置为 AMS，而不是 AMS Lite。
+使用 AMS Lite 会导致兼容性问题。
 
 <h1 align="center">支持</h1>
 
@@ -143,7 +154,7 @@ https://github.com/jarczakpawel/BambuStudio-BMCU
 
 ## 下载
 
-请从 **“Releases”** 栏目（GitHub 页面右侧）下载可直接使用的固件。
+请从 **"Releases"** 栏目（GitHub 页面右侧）下载可直接使用的固件。
 所有固件变体都会在那里生成，并附带 **.txt 说明文档**，告诉你应该选择哪个构建版本。
 
 先选择对应的打印机模式文件夹（standard(A1) / soft_load(A1) / high_force_load(P1S)），然后像往常一样选择 AUTOLOAD / RGB / slots。
@@ -330,7 +341,7 @@ https://www.youtube.com/watch?v=Hn_DNzSmhuc
   - **H2 系列**很可能也能工作，因为那里已确认支持**第一代 AMS**。
 
 ### 修复
-- filament 用完时，**“filament 使用中”**标志现在能被正确清除。
+- filament 用完时，**"filament 使用中"**标志现在能被正确清除。
 - 新增对**手动拉起 buffer 时回抽**的支持，即使在内部**没有 filament** 时也可以。
 
 ## V10.3
@@ -341,7 +352,7 @@ https://www.youtube.com/watch?v=Hn_DNzSmhuc
     - 比 **standard(A1)** 使用更低的 filament 加载力。
     - 适用于一些杠杆弹簧较弱的 BMCU 单元，加载力过强会导致 filament 装入时发出咔哒声/打磨声。
 - 改进了空通道检测校准。
-    - 固件现在为每个通道分别校准并存储“无 filament”检测点。
+    - 固件现在为每个通道分别校准并存储"无 filament"检测点。
     - 这提高了在通道/模块间空闲检测电压不同的硬件变体上的可靠性。
 - 改进了校准行为：
     - 校准现在还会检测并保存**每个通道的霍尔极性**
@@ -427,7 +438,7 @@ https://www.youtube.com/watch?v=Hn_DNzSmhuc
 - 支持打印机断电/掉电后的打印恢复（可正确恢复打印）。
 - 改进了 **P1S** 的行为（因 PTFE 路径过长/弯曲导致的装入问题）。
 - 为**单微动开关 PCB** 板新增 AUTOLOAD 支持：
-    - 通过按压 buffer（“buffer tap”）触发。
+    - 通过按压 buffer（"buffer tap"）触发。
     - 启动 filament 装入，与外部开关触发完全相同。
 - 整体更稳定的装入过程。
 - 改进了对**低扭矩 BMCU** 变体的支持。
@@ -437,7 +448,7 @@ https://www.youtube.com/watch?v=Hn_DNzSmhuc
 ### 用户可见变更
 - **记住已装入的 filament（持久化状态）。**
   你可以装入 filament 并安全关闭打印机电源。
-  这允许你在 G-code 中禁用“结束时自动卸载”行为（如果你经常使用单一 filament 打印），
+  这允许你在 G-code 中禁用"结束时自动卸载"行为（如果你经常使用单一 filament 打印），
   让 filament 保持装入，直到你真正需要更换。
   更多信息：https://wiki.bambulab.com/en/ams/manual/ams-not-unloading-to-save-filament
 - **100% 解决 filament 装入问题。** 系统在各硬件变体上稳定且一致。
@@ -495,7 +506,7 @@ https://www.youtube.com/watch?v=Hn_DNzSmhuc
 - AMS 数据拆分为独立记录——更改一个 filament 不会重写整个结构。
 
 ## 软 I2C / AS5600
-- 从 Arduino 重写，移除了时序 bug 和 Arduino 的“魔法”。
+- 从 Arduino 重写，移除了时序 bug 和 Arduino 的"魔法"。
 - 正确的 ACK/NACK、START/STOP、恢复处理
 - 对有错误的通道进行硬隔离
 
