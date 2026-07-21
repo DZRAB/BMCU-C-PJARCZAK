@@ -20,17 +20,14 @@ BMCU-C 是 **Bambu Lab AMS（自动多色换料系统）的开源替代固件**�
 
 ---
 
-## 版本说明（与 README 保持一致）
+## 版本说明
 
-本仓库（BMCU-C）基于原作者 **jarczakpawel** 的 BMCU 固件（原作者最新基线 **V10.5**）进行二次开发，采用**双版本轴**：
+本仓库（BMCU-C）基于原作者 **jarczakpawel** 的 BMCU 固件（基线 **V10.5**）二次开发：
 
-- **固件兼容版本（打印机看到的）**：保持原作者 **V10.5**，固件向打印机上报的版本号固定为 `10.50`（`bambu_bus_ams.cpp`），不随本仓库迭代改变 → 打印机兼容性识别不变。
-- **本仓库自有版本（git 标签管理）**：
-  - **V1.0 = `v1.0-baseline`**：AHT20 开发前已完结的基线（基于原作者 V10.5）。
-  - **V2.0 = `v2.0-aht20`**：在 V1.0 基础上新增 AHT20 温湿度等功能的版本。
-- 仓库 `version` 文件记为 `10.50.00.00`，即 10.5 基线，保留原作者版本出处。
+- 固件向打印机上报的版本号保持 `10.50`（原作者 V10.5），以维持打印机兼容性识别。
+- 本仓库自身的迭代使用 git 标签管理（如 `v1.0-baseline`、`v2.0-aht20`），后续版本递增。
 
-> 版本详细改动与回退方式见 [`README.md`](./README.md) 顶部「本仓库版本说明」。
+当前版本 `v2.0-aht20` 在基线 V10.5 基础上新增 AHT20 温湿度传感器支持（见第 7 章）。回退到基线：`git checkout v1.0-baseline`。
 
 ---
 
@@ -42,7 +39,7 @@ BMCU-C 是 **Bambu Lab AMS（自动多色换料系统）的开源替代固件**�
 | TIMER / PWM | 4 路电机驱动（每通道一路） |
 | ADC + DMA | 采集 buffer 位置电压（空通道检测、DM 开关） |
 | 软 I2C（GPIO 模拟开漏） | 4 路 AS5600 磁编码器（测 buffer 轮角度→距离/速度） |
-| 软 I2C（独立通道 PB10/PB11） | AHT20 温湿度传感器（环境温湿度；SDA 开漏安全，不与 AS5600 共用总线） |
+| 软 I2C（独立通道 PB10/PB11，两线开漏） | AHT20 温湿度传感器（环境温湿度；不与 AS5600 共用总线） |
 | WS2812 RGB | 1 颗系统灯（SYS_RGB）+ 4 颗通道灯（RGBOUT[0..3]） |
 | 内部 Flash 末 4KB 扇区 | NVM 持久化（校准、filament 元数据、状态） |
 
@@ -242,7 +239,7 @@ AHUB 用 `CRC->DATAR` 硬件 CRC 外设做 32 位校验（`ahubus_package_add_cr
 - **AS5600 健康门控**：连续失败 `kAS5600_FAIL_TRIP=3` 次判离线并隔离该通道；恢复需 `kAS5600_OK_RECOVER=2` 次连续正常，防止失控。
 - **ADC_DMA**（`ADC_DMA.cpp`）：并行扫描 ADC1+ADC2，DMA 半满/全满后台滤波，约 5ms 更新一次；用于空通道检测电压、DM 微动开关电压。
 - **校准**（`MC_PULL_calibration.cpp`）：首次空通道启动记录每通道“无 filament”检测点（`MC_PULL_V_OFFSET/MIN/MAX`）、霍尔极性（`MC_PULL_POLARITY`）、DM 开关阈值（`MC_DM_KEY_NONE_THRESH`）；按住 buffer 约 5s 可重新校准。
-- **AHT20 温湿度传感器**（`aht20.cpp`）：独立软件 I2C 通道（PB10=SCL 推挽 / PB11=SDA 开漏），**不与** 4 路 AS5600 共用总线。SDA 采用**开漏**（`GPIO_Mode_Out_OD`）而非推挽——写时拉低=低、释放=靠外部上拉拉高，读时切输入上拉（高阻），绝不主动输出强高电平，从根源避免主从电平冲突短路/炸电源芯片。上电 `init()` 发送 `0xBA` 软复位、`0xE1 0x08 0x00` 初始化；之后每 2 秒由 `main.cpp` 主循环非阻塞采样（先 `start_measure()` 触发测量，约 90ms 后 `get_measure()` 读取 6 字节温湿度，状态位校验）。结果写入 `ams[].filament[].compartment_temperature`（℃）/ `compartment_humidity`（%），由现有 ahub / bambu 协议自动上报打印机。
+- **AHT20 温湿度传感器**（`aht20.cpp`）：独立软件 I2C 通道（PB10=SCL / PB11=SDA，两线均开漏 `GPIO_Mode_Out_OD`，符合标准 I2C 规范），**不与** 4 路 AS5600 共用总线。写时拉低=低、释放=靠外部上拉拉高，读 SDA 时切输入上拉（高阻），绝不主动输出强高电平，从根源避免主从电平冲突短路。上电 `init()` 发送 `0xBA` 软复位、`0xE1 0x08 0x00` 初始化；之后每 2 秒由 `main.cpp` 主循环非阻塞采样（先 `start_measure()` 触发测量，约 90ms 后 `get_measure()` 读取 6 字节温湿度，状态位校验）。结果写入 `ams[].filament[].compartment_temperature`（℃）/ `compartment_humidity`（%），由现有 ahub / bambu 协议自动上报打印机。
 
 ---
 

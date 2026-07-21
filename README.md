@@ -1,54 +1,39 @@
 # 本仓库版本说明
 
-> 本仓库（BMCU-C）基于原作者 **jarczakpawel** 的 BMCU 固件（原作者最新基线 **V10.5**）进行二次开发。本文件顶部为本仓库自己的版本管理说明；原作者原始的校准 / 兼容性 / 更新日志等内容，保留在下方「BMCU 固件 – 校准与兼容性说明（原作者内容 · 保留参考）」一节，供查阅。
+本仓库（BMCU-C）基于原作者 **jarczakpawel** 的 BMCU 固件（基线 **V10.5**）二次开发。
 
-## 版本简介
+- 固件向打印机上报的版本号保持 `10.50`（原作者 V10.5），以维持打印机兼容性识别。
+- 本仓库自身的迭代使用 git 标签管理（如 `v1.0-baseline`、`v2.0-aht20`），后续版本递增。
 
-本仓库采用**双版本轴**：
+## 当前版本：v2.0-aht20
 
-- **固件兼容版本（打印机看到的）**：保持原作者 **V10.5**，固件向打印机上报的版本号固定为 `10.50`（`bambu_bus_ams.cpp`），不随本仓库迭代改变 → 打印机兼容性识别不变。
-- **本仓库自有版本（git 标签管理）**：
-  - **V1.0 = `v1.0-baseline`**：AHT20 开发前已完结的基线（基于原作者 V10.5）。
-  - **V2.0 = `v2.0-aht20`**：在 V1.0 基础上新增 AHT20 温湿度等功能的版本。
-- 仓库 `version` 文件记为 `10.50.00.00`，即 10.5 基线，保留原作者版本出处。
+在基线 V10.5 基础上新增 **AHT20 温湿度传感器** 支持，将 BMCU 所在环境（料箱/机箱）的温湿度上报给打印机。
 
-### v1.0-baseline（AHT20 开发前完结）
+- **硬件连接**（独立软件 I2C 通道，不与 4 路 AS5600 共用总线）：
+  - `SCL = PB10`（开漏）
+  - `SDA = PB11`（开漏）
+- **I2C 安全要点**：两线均为开漏（`GPIO_Mode_Out_OD`），符合标准 I2C 规范。写时拉低=低电平、释放=靠外部上拉拉高，读 SDA 时切输入上拉（高阻），绝不主动输出强高电平，避免与从设备电平冲突短路。
+- **外部上拉**：PB10/PB11 需外接 4.7kΩ 上拉到 3.3V（AHT20 模块通常自带；裸片焊接需补上拉）。
+- **数据流**：`main.cpp` 主循环每 2 秒非阻塞采样 → 填入 `ams[].filament[].compartment_temperature`（℃）/ `compartment_humidity`（%）→ 现有 ahub / bambu 协议自动上报，无需改协议层。
+- **引脚冲突**：PB10/PB11 原被 USART3 调试串口（TX/RX）占位，但 `Debug_log_on` 未定义时调试串口不初始化，故当前安全；若开启调试输出需另选引脚或关闭 AHT20。
+- **代码位置**：[`src/aht20/aht20.h`](./src/aht20/aht20.h) / [`src/aht20/aht20.cpp`](./src/aht20/aht20.cpp)，集成于 `src/main.cpp`。
 
-标签 **`v1.0-baseline`** 标记了一份**基线版本**，方便后续改乱代码时一键回退到该状态。该基线相对上游（原作者 V10.5）包含以下改动：
+## 编译
 
-- **源码编译修复**：将 `BMCU_SOFT_LOAD` / `BMCU_DM_TWO_MICROSWITCH` / `BMCU_ONLINE_LED_FILAMENT_RGB` 的 `#if X` 改为防御式 `#if defined(X) && (X + 0)`，缺省/空定义时按关闭处理，修复 `#if with no expression` 编译错误，原脚本与手动 `pio run -e fw` 亦可正常编译。
-- **新增 soft_load(A1) 全量编译脚本** [`build_all_firmwares_softload.sh`](./build_all_firmwares_softload.sh)：在原脚本基础上补充 soft_load(A1) 模式，三种模式格式统一。
-- **新增单固件编译脚本** [`build_one.sh`](./build_one.sh)：单独编译某一个固件变体（不跑全量），产物放在独立的 `single_build/` 目录，参数与用法详见 [`编译指南.md`](./编译指南.md)。
-- **新增 [`编译指南.md`](./编译指南.md)**：说明单变体编译、手动传参与扩展全量脚本（**如何编译请见该文档**）。
-- 源码注释与 README 已全量翻译为中文
-- 新增 [`BMCU开发说明.md`](./BMCU开发说明.md)，涵盖：
-  - 项目功能与软件架构（总线层 / ams 层 / 运动层解耦）
-  - 通讯协议详解：物理层（RS485 1.25 Mbps / 9E1）、BambuBus（`0x3D`）与 AHUB（`0x33`）帧格式、CRC 算法
-  - 换料状态机、Flash 持久化、构建变体说明
-- 所有协议/实现结论均标注了对应源码文件与函数名
-- `which_to_choose_*.txt` 翻译为中文
+预编译固件不再入库，改由 **GitHub Releases** 发布。本地构建：
 
-> 注意：预编译固件不再入库，改由 **GitHub Releases** 发布。请使用 `bash build_all_firmwares_softload.sh` 自行构建，或直接从 Releases 下载。
+- [`编译指南.md`](./编译指南.md)：单变体编译、手动传参与扩展全量脚本说明
+- [`build_all_firmwares_softload.sh`](./build_all_firmwares_softload.sh)：全量编译（含 soft_load(A1) 模式）
+- [`build_one.sh`](./build_one.sh)：单固件变体编译，产物在 `single_build/`
 
-回退方式：
+## 基线版本：v1.0-baseline
+
+标签 **`v1.0-baseline`** 标记了一份基线版本，可一键回退到该状态：
 
 ```bash
 git checkout v1.0-baseline     # 查看基线版本
 git reset --hard v1.0-baseline # 将当前分支强制还原到基线
 ```
-
-### v2.0-aht20（含 AHT20 温湿度等新增）
-
-标签 **`v2.0-aht20`** 在 V1.0 基线基础上新增了 **AHT20 温湿度传感器** 支持，用于把 BMCU 所在环境（料箱/机箱）的温湿度上报给打印机。
-
-- **硬件连接（独立通道，软件 I2C）**：
-  - `SCL = PB10`（推挽输出，主设备时钟；AHT20 不拉伸 SCL，推挽安全）
-  - `SDA = PB11`（**开漏**输出）
-- **安全要点（重要）**：SDA 必须配置为**开漏**（`GPIO_Mode_Out_OD`），读时切换为输入上拉（高阻）。写时拉低=低电平、释放=靠外部上拉电阻拉高；**绝不主动输出强高电平**，避免与从设备电平冲突造成短路、烧毁电源芯片。（此前有实现因 SDA 误用推挽、上电逻辑未控好而短路炸电源芯片，本驱动已规避。）
-- **外部上拉**：PB10/PB11 需外接 4.7kΩ 上拉到 3.3V（AHT20 模块通常自带；裸片焊接需在板子上补上拉）。
-- **数据流**：`main.cpp` 主循环每 2 秒非阻塞采样一次 → 填入 `ams[].filament[].compartment_temperature`（℃）/ `compartment_humidity`（%）→ 现有 ahub / bambu 协议自动上报，无需改协议层。
-- **引脚冲突**：PB10/PB11 原被 USART3 调试串口（TX/RX）占位，但 `Debug_log_on` 未定义时调试串口不初始化，故当前安全；若以后开启调试输出需另选引脚或关闭 AHT20。
-- **代码位置**：[`src/aht20/aht20.h`](./src/aht20/aht20.h) / [`src/aht20/aht20.cpp`](./src/aht20/aht20.cpp)，集成于 `src/main.cpp`。
 
 ---
 

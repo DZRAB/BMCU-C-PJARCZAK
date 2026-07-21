@@ -3,7 +3,7 @@
 
 uint32_t AHT20::g_iic_delay_ticks = 1;
 
-// 软件 I2C 引脚：PB10=SCL(推挽)，PB11=SDA(开漏)
+// 软件 I2C 引脚：PB10=SCL(开漏)，PB11=SDA(开漏)
 GPIO_TypeDef* const AHT20::IIC_PORT_SCL = GPIOB;
 GPIO_TypeDef* const AHT20::IIC_PORT_SDA = GPIOB;
 
@@ -142,7 +142,7 @@ void AHT20::init()
     GPIO_InitTypeDef gi = {0};
     gi.GPIO_Speed = GPIO_Speed_50MHz;
 
-    gi.GPIO_Mode = GPIO_Mode_Out_PP;      // SCL 推挽（主设备时钟，AHT20 不拉伸）
+    gi.GPIO_Mode = GPIO_Mode_Out_OD;      // SCL 开漏（符合标准 I2C 规范）
     gi.GPIO_Pin  = IIC_PIN_SCL;
     GPIO_Init(IIC_PORT_SCL, &gi);
 
