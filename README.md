@@ -176,6 +176,9 @@ bash build_one.sh softload 1 0 A 0.30   # single_build/soft_load(A1)/AUTOLOAD/FI
 
 ## 刷写
 
+> [!WARNING]
+> 下面「BMCU Flasher」的说明适用于**原作者原版固件**。本仓库（BMCU-C）的二次开发固件**不支持 BMCU Flasher**，请用 **WCHISPTool** 烧录（方法见 [`BMCU使用指南.md`](./BMCU使用指南.md) 与 [`编译指南.md`](./编译指南.md) 的刷写章节）。
+
 要在以下任意系统上刷写任何版本的 BMCU（USB 或 TTL）：
 
 - Windows
