@@ -8,6 +8,9 @@ firmwares/
 # ===== 单独编译（build_one.sh）产物，独立文件夹，不入库 =====
 single_build/
 
+# ===== 高速批量编译脚本的缓存（工具链参数 + 预编译 .o），不入库 =====
+.pio_parallel/
+
 # ===== 编辑器/IDE 本地配置（不入库）=====
 .vscode/
 
