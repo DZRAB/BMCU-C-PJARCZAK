@@ -28,7 +28,13 @@
 
 ## 基线版本：v1.0-baseline
 
-标签 **`v1.0-baseline`** 标记了一份基线版本，可一键回退到该状态：
+`v1.0-baseline` 是基于原作者 V10.5 整理出的可编译、有文档的干净基线，作为后续开发的起点。相对原作者主要改动：
+
+- **修复编译问题**：将 `BMCU_SOFT_LOAD` / `BMCU_DM_TWO_MICROSWITCH` / `BMCU_ONLINE_LED_FILAMENT_RGB` 的 `#if X` 改为 `#if defined(X) && (X + 0)`，修复 `#if with no expression` 编译错误，使原脚本与手动 `pio run -e fw` 均可正常编译。
+- **新增编译脚本**：`build_all_firmwares_softload.sh`（全量，含 soft_load(A1) 模式）、`build_one.sh`（单固件变体，产物在 `single_build/`）。
+- **新增文档并中文化**：`编译指南.md`（编译说明）、`BMCU开发说明.md`（架构与协议详解）；README 与源码注释翻译为中文，`which_to_choose_*.txt` 翻译为中文。
+
+可一键回退到该状态：
 
 ```bash
 git checkout v1.0-baseline     # 查看基线版本
