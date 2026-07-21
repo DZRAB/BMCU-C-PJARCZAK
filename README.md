@@ -17,14 +17,19 @@
 - **数据流**：`main.cpp` 主循环每 2 秒非阻塞采样 → 填入 `ams[].filament[].compartment_temperature`（℃）/ `compartment_humidity`（%）→ 现有 ahub / bambu 协议自动上报，无需改协议层。
 - **引脚冲突**：PB10/PB11 原被 USART3 调试串口（TX/RX）占位，但 `Debug_log_on` 未定义时调试串口不初始化，故当前安全；若开启调试输出需另选引脚或关闭 AHT20。
 - **代码位置**：[`src/aht20/aht20.h`](./src/aht20/aht20.h) / [`src/aht20/aht20.cpp`](./src/aht20/aht20.cpp)，集成于 `src/main.cpp`。
+- **编译**：方法见 [`编译指南.md`](./编译指南.md)；预编译固件由 **GitHub Releases** 发布。
 
-## 编译
+## 相关文档
 
-预编译固件不再入库，改由 **GitHub Releases** 发布。本地构建：
+本仓库文档按职责划分，避免重复：
 
-- [`编译指南.md`](./编译指南.md)：单变体编译、手动传参与扩展全量脚本说明
-- [`build_all_firmwares_softload.sh`](./build_all_firmwares_softload.sh)：全量编译（含 soft_load(A1) 模式）
-- [`build_one.sh`](./build_one.sh)：单固件变体编译，产物在 `single_build/`
+| 文档 | 内容 |
+|------|------|
+| [`README.md`](./README.md) | 本文件：版本与功能概览 |
+| [`BMCU使用指南.md`](./BMCU使用指南.md) | 使用：固件选型、刷写、校准、注意事项 |
+| [`BMCU开发说明.md`](./BMCU开发说明.md) | 开发细节：架构、通讯协议、状态机、传感器 |
+| [`编译指南.md`](./编译指南.md) | 编译方法、脚本与变体宏定义 |
+| [`bmcu-vs-firmware-locks.md`](./bmcu-vs-firmware-locks.md) | Bambu 固件更新对 BMCU 兼容性的影响 |
 
 ## 基线版本：v1.0-baseline
 
