@@ -10,6 +10,7 @@
 #include "ADC_DMA.h"
 #include "Debug_log.h"
 #include "aht20/aht20.h"
+#include "sim_aht20.h"
 #include "hal/time_hw.h"
 #include <string.h>
 
@@ -290,6 +291,10 @@ int main(void)
                 aht20_next_ms = now_ms;
             }
         }
+
+        // ===== 软件模拟 AHT20 温湿度（测试用，无硬件时）=====
+        // ⚠️ AHT20 实物到位后请注释掉下面这一行，恢复真实传感器上报
+        sim_aht20_run();
 
         Motion_control_run(error);
         RGB_update();
