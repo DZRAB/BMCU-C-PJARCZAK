@@ -492,7 +492,7 @@ log("  第四步：并行预编译所有 .o 文件")
 log("=" * 60)
 
 if os.path.exists(CACHE_DIR):
-    pass  # DEBUG: 保留中间产物以便对比 .elf (shutil.rmtree(CACHE_DIR, ignore_errors=True))
+    shutil.rmtree(CACHE_DIR, ignore_errors=True)
 os.makedirs(CACHE_DIR)
 COMMON_OBJ_DIR = os.path.join(CACHE_DIR, "common")
 os.makedirs(COMMON_OBJ_DIR, exist_ok=True)
