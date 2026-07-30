@@ -134,8 +134,29 @@ def _pio_ini_mtime():
         return 0
 
 
+def _src_fingerprint():
+    """源文件集合指纹：任何新增/删除/修改源文件都会使缓存失效。
+    否则新增源文件（如 sim_aht20.cpp）不会进入链接，导致 undefined reference。"""
+    h = hashlib.sha256()
+    src_root = os.path.abspath("src")
+    for root, _, files in os.walk(src_root):
+        for fn in sorted(files):
+            if fn.endswith((".c", ".cpp", ".h", ".cc", ".cxx", ".s", ".S")):
+                p = os.path.join(root, fn)
+                try:
+                    h.update(os.path.relpath(p, src_root).replace("\\", "/").encode("utf-8"))
+                    h.update(struct.pack("<Q", int(os.path.getmtime(p) * 1000)))
+                except OSError:
+                    pass
+    return h.hexdigest()
+
+
+SIG_PATH = os.path.join(PARALLEL_DIR, "verbose_cache.sig")
+
 cache_valid = False
-if os.path.exists(VERBOSE_CACHE) and _pio_ini_mtime() < os.path.getmtime(VERBOSE_CACHE):
+if (os.path.exists(VERBOSE_CACHE) and os.path.exists(SIG_PATH)
+        and _pio_ini_mtime() < os.path.getmtime(VERBOSE_CACHE)
+        and open(SIG_PATH, "r", encoding="utf-8").read().strip() == _src_fingerprint()):
     cache_valid = True
 
 t_extract = time.perf_counter()
@@ -153,6 +174,8 @@ else:
     verbose_output = res.stdout.decode(errors="replace") + res.stderr.decode(errors="replace")
     with open(VERBOSE_CACHE, "w", encoding="utf-8") as f:
         f.write(verbose_output)
+    with open(SIG_PATH, "w", encoding="utf-8") as f:
+        f.write(_src_fingerprint())
 t_extract = time.perf_counter() - t_extract
 log(f"  verbose 输出 {len(verbose_output)} 字符，提取耗时 {t_extract:.1f}s")
 
@@ -298,6 +321,17 @@ for i in range(obj_start, len(link_tokens)):
         LINK_SUFFIX.append(tok.replace("/", os.sep) if (tok.endswith(".a") or tok.startswith("-L")) else tok)
     if "-Wl,--end-group" in tok:
         in_suffix = False
+
+# 原始预编译框架库（libc / libm / 启动辅助等都在其中，pio 链接时直接引用）。
+# 不能用自己的 LIB_VARIANT 替换它，否则会丢失 C 运行时初始化（__libc_init_array 等）。
+ORIG_FW_A = None
+for t in link_tokens:
+    if t.endswith(".a"):
+        ORIG_FW_A = os.path.abspath(t.replace("/", os.sep))
+        break
+if ORIG_FW_A is None or not os.path.exists(ORIG_FW_A):
+    log(f"ERROR: 找不到原始框架库: {ORIG_FW_A}")
+    sys.exit(1)
 
 # --- 收集所有编译命令：obj_path -> (src, compiler, filtered_flags) ---
 compile_map = {}          # link_obj_path -> (src, compiler, flags)
@@ -458,7 +492,7 @@ log("  第四步：并行预编译所有 .o 文件")
 log("=" * 60)
 
 if os.path.exists(CACHE_DIR):
-    shutil.rmtree(CACHE_DIR, ignore_errors=True)
+    pass  # DEBUG: 保留中间产物以便对比 .elf (shutil.rmtree(CACHE_DIR, ignore_errors=True))
 os.makedirs(CACHE_DIR)
 COMMON_OBJ_DIR = os.path.join(CACHE_DIR, "common")
 os.makedirs(COMMON_OBJ_DIR, exist_ok=True)
@@ -495,13 +529,10 @@ def vkey_of(dm, rgb, p1s, soft_load, ams_num):
 # 预编译任务收集
 compile_tasks = []   # (compiler, flags, src, obj_path, name)
 
-# 框架 / SDK
+# 框架 / SDK：直接复用 pio 已编译好的原始 .o（位于 .pio/build/moj/...），
+# 不再重编。重编会丢失调试信息且无法复刻预编译库（libc 等），导致固件异常。
 for obj_path in list(framework_objs.keys()):
-    src, compiler, flags = compile_map[obj_path]
-    obj = os.path.join(COMMON_OBJ_DIR, "fw", os.path.basename(obj_path))
-    os.makedirs(os.path.dirname(os.path.abspath(obj)), exist_ok=True)
-    compile_tasks.append((compiler, flags, src, obj, f"fw:{os.path.basename(obj_path)}"))
-    framework_objs[obj_path] = obj
+    framework_objs[obj_path] = os.path.abspath(obj_path.replace("\\", "/"))
 
 # 用户：不变
 invariant_user_map = {}   # link_obj_path -> common .o
@@ -578,20 +609,12 @@ if missing_fw:
     sys.exit(1)
 
 # 完全复刻 pio 的链接结构：
-#  - 链接命令里显式列出的框架 .o 直接入链（保持原顺序）
-#  - 其余框架 .o（外设等）打进 libFrameworkNoneOSVariant.a，与原 pio 同名
+#  - 链接命令里显式列出的框架 .o 直接入链（保持原顺序，已是 pio 原始 .o）
+#  - 预编译框架库（libc / libm / 启动辅助）直接用 pio 生成的原始 libFrameworkNoneOSVariant.a
+#    （ORIG_FW_A），不再自行打包，避免丢失 C 运行时初始化。
 link_obj_set = set(link_obj_order)
 explicit_fw_objs = {k: v for k, v in framework_objs.items() if k in link_obj_set}
-lib_fw_objs = sorted((os.path.abspath(v) for k, v in framework_objs.items() if k not in link_obj_set),
-                      key=lambda p: os.path.basename(p).lower())
-LIB_VARIANT = os.path.join(COMMON_OBJ_DIR, "libFrameworkNoneOSVariant.a")
-ar_cmd = [AR, "rc", LIB_VARIANT] + lib_fw_objs
-r_ar = subprocess.run(ar_cmd, capture_output=True, startupinfo=STARTUPINFO)
-if r_ar.returncode != 0:
-    log("ERROR: 打包框架静态库失败")
-    log(r_ar.stderr.decode(errors="replace")[:1000])
-    sys.exit(1)
-log(f"  框架静态库已生成: {LIB_VARIANT}（{len(lib_fw_objs)} 个 .o；显式链 {len(explicit_fw_objs)} 个）")
+log(f"  显式链框架 .o 数量: {len(explicit_fw_objs)}；原始框架库: {ORIG_FW_A}")
 
 
 # ====================================================================
@@ -646,11 +669,10 @@ def run_base_link(combo):
     elf_path = os.path.join(tmp_dir, "firmware.elf")
     link_cmd = [CXX, "-o", os.path.abspath(elf_path), "-T", LINK_LD] + LINK_FLAGS \
         + [os.path.abspath(o) for o in link_objs]
-    link_cmd += [f"-L{COMMON_OBJ_DIR}"]
     for tok in LINK_SUFFIX:
         if tok.endswith(".a"):
-            # 用复刻的 libFrameworkNoneOSVariant.a 替换原框架 .a
-            link_cmd.append(os.path.abspath(LIB_VARIANT))
+            # 直接使用 pio 生成的原始预编译框架库（含 libc 等），不自行替换
+            link_cmd.append(ORIG_FW_A)
         else:
             link_cmd.append(tok)
     final = link_cmd
