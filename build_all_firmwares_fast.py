@@ -449,18 +449,30 @@ log("  第三步：收集任务 & 创建输出目录")
 log("=" * 60)
 
 tasks = []
+# 双开关(AUTOLOAD=1)：自动回抽，每槽仅 1 个固件（2.00m 仅作安全上限，实际长度由 S2 自动判定）
+# 单开关(NO_AUTOLOAD=0)：保留全部回抽长度矩阵（与旧版一致，供 Release 发布）
+AUTO_RETRACT_CAP = "2.00"
 for mode_dir, p1s, soft_load in MODES:
     for dm in (1, 0):
         dm_dir = "AUTOLOAD" if dm == 1 else "NO_AUTOLOAD"
         for rgb in (1, 0):
             rgb_dir = "FILAMENT_RGB_ON" if rgb == 1 else "FILAMENT_RGB_OFF"
             base = os.path.join(OUT_DIR, mode_dir, dm_dir, rgb_dir)
-            tasks.append((os.path.join(base, "SOLO", f"solo_{SOLO_RETRACT}.bin"),
-                          0, SOLO_RETRACT, dm, rgb, p1s, soft_load))
-            for slot, ams_num in (("A", 0), ("B", 1), ("C", 2), ("D", 3)):
-                for r in RETRACTS:
-                    tasks.append((os.path.join(base, f"AMS_{slot}", f"ams_{slot.lower()}_{r}f.bin"),
-                                  ams_num, f"{r}f", dm, rgb, p1s, soft_load))
+            if dm == 1:
+                # 双开关自动回抽：SOLO + AMS_A~D 各 1 个
+                tasks.append((os.path.join(base, "SOLO", f"solo_{AUTO_RETRACT_CAP}f_auto.bin"),
+                              0, f"{AUTO_RETRACT_CAP}f", dm, rgb, p1s, soft_load))
+                for slot, ams_num in (("A", 0), ("B", 1), ("C", 2), ("D", 3)):
+                    tasks.append((os.path.join(base, f"AMS_{slot}", f"ams_{slot.lower()}_{AUTO_RETRACT_CAP}f_auto.bin"),
+                                  ams_num, f"{AUTO_RETRACT_CAP}f", dm, rgb, p1s, soft_load))
+            else:
+                # 单开关：全回抽长度矩阵
+                tasks.append((os.path.join(base, "SOLO", f"solo_{SOLO_RETRACT}.bin"),
+                              0, SOLO_RETRACT, dm, rgb, p1s, soft_load))
+                for slot, ams_num in (("A", 0), ("B", 1), ("C", 2), ("D", 3)):
+                    for r in RETRACTS:
+                        tasks.append((os.path.join(base, f"AMS_{slot}", f"ams_{slot.lower()}_{r}f.bin"),
+                                      ams_num, f"{r}f", dm, rgb, p1s, soft_load))
 
 total_tasks = len(tasks)
 log(f"  共 {total_tasks} 个固件编译任务")

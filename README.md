@@ -5,9 +5,12 @@
 - 固件向打印机上报的版本号保持 `10.50`（原作者 V10.5），以维持打印机兼容性识别。
 - 本仓库自身的迭代使用 git 标签管理（如 `v1.0-baseline`、`v2.0-aht20`、`v2.1-aht20`），后续版本递增。
 
-## 当前版本：v2.1-aht20
+## 当前版本：v3.0-autoretract（双开关自动回抽）
 
-在基线 V10.5 基础上新增 **AHT20 温湿度传感器** 支持，将 BMCU 所在环境（料箱/机箱）的温湿度上报给打印机。
+在 v2.1-aht20 基础上新增 **双开关自动回抽**：退料时用第二个微动开关 S2 自动判定料根位置，无需在编译期选择回抽长度（固件文件名带 `_auto` 后缀，`2.00` 仅作安全上限）。双开关固件矩阵精简为每槽 1 个（共 30 个）；单开关（NO_AUTOLOAD）仍保留全回抽长度矩阵（942 个）。
+
+### v3.0-autoretract 更新说明
+- **新增双开关自动回抽（`BMCU_DM_AUTO_RETRACT`）**：见上。仅双微动开关板有效；自动回抽期间冻结对打印机上报，多重兜底（超距/超时）防卡死。可通过 `-DBMCU_DM_AUTO_RETRACT=0` 关闭，退化回固定长度逻辑。
 
 ### v2.1-aht20 更新说明
 - **修复快速编译固件不可用**：修复 `build_all_firmwares_fast.py` 生成的固件无法正常工作的问题（v2.0-aht20 发布的固件已作废），固件已测试可用。
@@ -166,7 +169,9 @@ https://github.com/jarczakpawel/BambuStudio-BMCU
 请从 **"Releases"** 栏目（GitHub 页面右侧）下载可直接使用的固件。
 所有固件变体都会在那里生成，并附带 **.txt 说明文档**，告诉你应该选择哪个构建版本。
 
-先选择对应的打印机模式文件夹（standard(A1) / soft_load(A1) / high_force_load(P1S)），然后像往常一样选择 AUTOLOAD / RGB / slots。
+先选择对应的打印机模式文件夹（standard(A1) / soft_load(A1) / high_force_load(P1S)），再按硬件版本选文件夹：
+- **双开关板（AUTOLOAD）**：自动回抽，无需选择回抽长度，直接按 RGB / 槽位（SOLO / AMS_A~D）选 `xxx_2.00f_auto.bin` 即可。
+- **单开关板（NO_AUTOLOAD）**：仍需按 PTFE 长度选回抽长度（SOLO 固定 9.5cm；AMS_A~D 每槽 0.10~2.00m 共 39 档）。
 
 ## 从源码编译
 
@@ -178,12 +183,12 @@ bash build_all_firmwares_softload.sh
 
 该脚本会生成 `firmwares/` 目录，包含三种模式（standard(A1) / soft_load(A1) / high_force_load(P1S)）下各 AUTOLOAD / RGB / slots 组合。
 
-> 如需更快的本地全量编译（约 1884 个固件只需几分钟，常规脚本需数小时），可用 [`build_all_firmwares_fast.py`](./build_all_firmwares_fast.py)（详见 [`编译指南.md`](./docs/编译指南.md) 第四节）。
+> 如需更快的本地全量编译（约 972 个固件只需几分钟，常规脚本需数小时），可用 [`build_all_firmwares_fast.py`](./build_all_firmwares_fast.py)（详见 [`编译指南.md`](./docs/编译指南.md) 第四节）。
 
 单独补编某一个固件（不跑全量）用 `build_one.sh`，产物放在独立的 `single_build/` 目录，例如：
 
 ```bash
-bash build_one.sh softload 1 0 A 0.30   # single_build/soft_load(A1)/AUTOLOAD/FILAMENT_RGB_OFF/AMS_A/ams_a_0.30f.bin
+bash build_one.sh softload 1 0 A 0.30   # AUTOLOAD=1(双开关)：single_build/soft_load(A1)/AUTOLOAD/FILAMENT_RGB_OFF/AMS_A/ams_a_2.00f_auto.bin （0.30 被忽略，回抽由 S2 自动判定）
 ```
 
 - 单变体编译、手动 `pio run -e fw` 传参、`build_one.sh` 参数说明，详见 **[`编译指南.md`](./docs/编译指南.md)**。

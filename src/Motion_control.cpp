@@ -164,6 +164,18 @@ static float g_pull_remain_m[4]  = {0,0,0,0};
 static float g_pull_speed_set[4] = {-PULL_V_FAST,-PULL_V_FAST,-PULL_V_FAST,-PULL_V_FAST}; // mm/s (ujemne)
 
 float MC_PULL_V_OFFSET[4]      = {0.0f, 0.0f, 0.0f, 0.0f};
+
+// ---- 双开关自动回抽（BMCU_DM_AUTO_RETRACT）----
+// 用 S2 开关判断料根位置：退料至 S2 释放(ks 1->2)，再正推至 S2 再按下(ks->1)即定位完成。
+#if (BMCU_DM_AUTO_RETRACT + 0)
+static constexpr float AR_RESEAT_MAX_M = 0.05f; // 回推定位最大正推距离(米)，约5cm
+static uint8_t dm_key_raw[4] = {0,0,0,0};        // 原始解码状态(供自检，不含手势覆盖)
+enum dm_autoretract_phase_enum { AR_IDLE, AR_RETRACT_WAIT_S2, AR_RESEAT_WAIT_S1S2 };
+static dm_autoretract_phase_enum dm_ar_phase[4] = {AR_IDLE,AR_IDLE,AR_IDLE,AR_IDLE};
+static bool dm_ar_freeze_report[4] = {false,false,false,false}; // 自检期间冻结对打印机上报
+static float dm_ar_reseat_start_m[4] = {0,0,0,0};
+static uint16_t dm_ar_reseat_cycles[4] = {0,0,0,0};
+#endif
 float MC_PULL_V_MIN[4]         = {1.00f, 1.00f, 1.00f, 1.00f};
 float MC_PULL_V_MAX[4]         = {2.00f, 2.00f, 2.00f, 2.00f};
 int8_t MC_PULL_POLARITY[4]     = {1, 1, 1, 1};
@@ -529,7 +541,13 @@ static inline void MC_PULL_ONLINE_read(uint32_t now_ticks)
 
         if (gst_active[i] && (phys == 0u)) state = 2u;
 
+#if (BMCU_DM_AUTO_RETRACT + 0)
+        dm_key_raw[i] = phys; // 原始开关状态，供自动回抽自检（不含手势覆盖）
+        if (!dm_ar_freeze_report[i])
+            MC_ONLINE_key_stu[i] = state; // 自检期间冻结上报，避免回抽过程误触发
+#else
         MC_ONLINE_key_stu[i] = state;
+#endif
     }
     // --- 缓冲轮手势装载结束 ---
 #else
@@ -2124,14 +2142,96 @@ static bool motor_motion_filamnet_pull_back_to_online_key(uint64_t time_now)
     bool wait = false;
     auto &A = ams[motion_control_ams_num];
 
+#if (BMCU_DM_AUTO_RETRACT + 0)
+// 自动回抽完成：停电机、复位自检状态、恢复上报、进入 redetect
+static auto dm_ar_finish_pullback = [](uint8_t i, uint64_t t_now) -> void
+{
+    g_pull_remain_m[i]  = 0.0f;
+    g_pull_speed_set[i] = -PULL_V_FAST;
+    MOTOR_CONTROL[i].set_motion(filament_motion_enum::filament_motion_stop, 100, t_now);
+    filament_pull_back_target[i] = motion_control_pull_back_distance;
+    dm_ar_phase[i] = AR_IDLE;
+    dm_ar_freeze_report[i] = false; // 恢复对打印机上报
+    filament_now_position[i] = filament_redetect;
+};
+#endif
+
     for (uint8_t i = 0; i < kChCount; i++)
     {
+#if (BMCU_DM_AUTO_RETRACT + 0)
+        // 若已离开回抽状态，确保解冻上报、复位自检相位（防止中断导致冻结卡死）
+        if (filament_now_position[i] != filament_pulling_back && dm_ar_freeze_report[i])
+        {
+            dm_ar_freeze_report[i] = false;
+            dm_ar_phase[i] = AR_IDLE;
+        }
+#endif
         switch (filament_now_position[i])
         {
         case filament_pulling_back:
         {
             MC_STU_RGB_set_latch(i, 0xFFu, 0x00u, 0xFFu, time_now, 1u);
 
+#if (BMCU_DM_AUTO_RETRACT + 0)
+            // ---- 双开关自动回抽：用 S2 判断料根位置，无需固定回抽长度 ----
+            if (dm_ar_phase[i] == AR_IDLE)
+            {
+                dm_ar_phase[i] = AR_RETRACT_WAIT_S2;
+                dm_ar_freeze_report[i] = true; // 冻结对打印机上报，避免回抽过程误触发
+            }
+
+            const uint8_t ks = dm_key_raw[i];           // 原始开关状态(未含手势覆盖)
+            const float safety_max = motion_control_pull_back_distance; // 固定长度仅作安全上限
+
+            if (dm_ar_phase[i] == AR_RETRACT_WAIT_S2)
+            {
+                const float d = absf(A.filament[i].meters - filament_pull_back_meters[i]);
+
+                if (ks == 0u)
+                {
+                    // 料已完全退出(超过 S1)：按完整退料处理
+                    dm_ar_finish_pullback(i, time_now);
+                }
+                else if (ks == 2u)
+                {
+                    // S2 释放(ks 1->2)：料根已退到 S2，转回推定位阶段
+                    dm_ar_phase[i] = AR_RESEAT_WAIT_S1S2;
+                    dm_ar_reseat_start_m[i] = A.filament[i].meters;
+                    dm_ar_reseat_cycles[i] = 0u;
+                    MOTOR_CONTROL[i].set_motion(filament_motion_enum::filament_motion_send, 100, time_now);
+                }
+                else if (d >= safety_max)
+                {
+                    // 安全上限兜底：未检测到 S2 释放，退回固定长度逻辑
+                    dm_ar_finish_pullback(i, time_now);
+                }
+                else
+                {
+                    // 继续退料（末端线性减速）
+                    const float remain = safety_max - d;
+                    const float k = clampf(remain / PULL_RAMP_M, 0.0f, 1.0f);
+                    const float v = PULL_V_END + (PULL_V_FAST - PULL_V_END) * k; // mm/s
+                    g_pull_remain_m[i] = (remain > 0.0f) ? remain : 0.0f;
+                    g_pull_speed_set[i] = -v;
+                    MOTOR_CONTROL[i].set_motion(filament_motion_enum::filament_motion_pull, 100, time_now);
+                }
+            }
+            else // AR_RESEAT_WAIT_S1S2
+            {
+                dm_ar_reseat_cycles[i]++;
+                if (ks == 1u || dm_ar_reseat_cycles[i] >= 200u)
+                {
+                    // S2 再次按下(料根刚好越过 S2、仍被 BMG 咬住)或超时：定位完成
+                    dm_ar_finish_pullback(i, time_now);
+                }
+                else if (absf(A.filament[i].meters - dm_ar_reseat_start_m[i]) >= AR_RESEAT_MAX_M)
+                {
+                    dm_ar_finish_pullback(i, time_now); // 距离兜底
+                }
+                // 否则 send 运动持续运行，直到上述条件满足
+            }
+#else
+            // ---- 原有固定长度回抽（单开关 / 自动回抽关闭）----
             const float target = filament_pull_back_target[i];
             const float d = absf(A.filament[i].meters - filament_pull_back_meters[i]);
 
@@ -2164,6 +2264,7 @@ static bool motor_motion_filamnet_pull_back_to_online_key(uint64_t time_now)
 
                 MOTOR_CONTROL[i].set_motion(filament_motion_enum::filament_motion_pull, 100, time_now);
             }
+#endif
 
             wait = true;
             break;
@@ -2269,6 +2370,11 @@ static void motor_motion_switch(uint64_t time_now)
             {
                 MC_STU_RGB_set_latch(num, 0xA0u, 0x2Du, 0xFFu, time_now, 1u);
                 filament_now_position[num] = filament_pulling_back;
+
+#if (BMCU_DM_AUTO_RETRACT + 0)
+                dm_ar_phase[num] = AR_IDLE;
+                dm_ar_freeze_report[num] = false;
+#endif
 
                 filament_pull_back_meters[num] = A.filament[num].meters;
 

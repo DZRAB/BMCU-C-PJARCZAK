@@ -34,6 +34,8 @@ OUT_GUIDE="README.md"
 [[ -f "${TXT_SLOTS}" ]]    || { echo "ERROR: 缺少 ${TXT_SLOTS}"; exit 1; }
 
 SOLO_RETRACT="0.095f"
+# 双开关自动回抽的安全上限（米）：实际回抽到位由 S2 自动判定，此值仅作兜底上限，须 >= 任何实际 PTFE 长度
+AUTO_RETRACT_CAP="2.00"
 RETRACTS=(
   "0.10" "0.15" "0.20" "0.25" "0.30" "0.35"
   "0.40" "0.45" "0.50" "0.55" "0.60" "0.65"
@@ -103,27 +105,40 @@ for entry in "${MODES[@]}"; do
       cp -f "${TXT_SLOTS}" "${base}/README.md"
       cp -f "${TXT_SLOTS}" "${base}/${OUT_GUIDE}"
 
-      build_and_copy "${base}/SOLO/solo_${SOLO_RETRACT}.bin" 0 "${SOLO_RETRACT}" "${dm}" "${rgb}" "${p1s}" "${softload}"
-
-      for slot in A B C D; do
-        case "${slot}" in
-          A) ams_num=0 ;;
-          B) ams_num=1 ;;
-          C) ams_num=2 ;;
-          D) ams_num=3 ;;
-        esac
-
-        for r in "${RETRACTS[@]}"; do
-          build_and_copy \
-            "${base}/AMS_${slot}/ams_${slot,,}_${r}f.bin" \
-            "${ams_num}" \
-            "${r}f" \
-            "${dm}" \
-            "${rgb}" \
-            "${p1s}" \
-            "${softload}"
+      # 双开关(AUTOLOAD=1)：自动回抽，每槽 1 个（2.00m 仅作安全上限）
+      # 单开关(NO_AUTOLOAD=0)：保留全部回抽长度矩阵（与旧版一致，供 Release）
+      if [[ "${dm}" == "1" ]]; then
+        build_and_copy "${base}/SOLO/solo_${AUTO_RETRACT_CAP}f_auto.bin" 0 "${AUTO_RETRACT_CAP}" "${dm}" "${rgb}" "${p1s}" "${softload}"
+        for slot in A B C D; do
+          case "${slot}" in
+            A) ams_num=0 ;;
+            B) ams_num=1 ;;
+            C) ams_num=2 ;;
+            D) ams_num=3 ;;
+          esac
+          build_and_copy "${base}/AMS_${slot}/ams_${slot,,}_${AUTO_RETRACT_CAP}f_auto.bin" "${ams_num}" "${AUTO_RETRACT_CAP}" "${dm}" "${rgb}" "${p1s}" "${softload}"
         done
-      done
+      else
+        build_and_copy "${base}/SOLO/solo_${SOLO_RETRACT}.bin" 0 "${SOLO_RETRACT}" "${dm}" "${rgb}" "${p1s}" "${softload}"
+        for slot in A B C D; do
+          case "${slot}" in
+            A) ams_num=0 ;;
+            B) ams_num=1 ;;
+            C) ams_num=2 ;;
+            D) ams_num=3 ;;
+          esac
+          for r in "${RETRACTS[@]}"; do
+            build_and_copy \
+              "${base}/AMS_${slot}/ams_${slot,,}_${r}f.bin" \
+              "${ams_num}" \
+              "${r}f" \
+              "${dm}" \
+              "${rgb}" \
+              "${p1s}" \
+              "${softload}"
+          done
+        done
+      fi
     done
   done
 done

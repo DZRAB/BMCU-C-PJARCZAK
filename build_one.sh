@@ -11,15 +11,15 @@
 #
 # 参数：
 #   MODE      standard | p1s | softload   （分别对应 standard(A1) / high_force_load(P1S) / soft_load(A1)）
-#   AUTOLOAD  1 | 0                        （1=开启双微动开关板 AUTOLOAD）
+#   AUTOLOAD  1 | 0                        （1=双微动开关板，开启 AUTOLOAD + 自动回抽；0=单微动开关板）
 #   RGB       1 | 0                        （1=ONLINE LED 显示 filament RGB）
 #   SLOT      SOLO | A | B | C | D         （AMS 槽位；SOLO 回抽默认 0.095）
-#   RETRACT   回抽长度(米)，如 0.30         （SOLO 可省略，默认 0.095）
+#   RETRACT   回抽长度(米)，如 0.30         （SOLO 可省略，默认 0.095；AUTOLOAD=1 时忽略此参数，回抽由 S2 自动判定）
 #
 # 示例：
-#   bash build_one.sh standard 1 1 SOLO            # single_build/standard(A1)/AUTOLOAD/FILAMENT_RGB_ON/SOLO/solo_0.095f.bin
-#   bash build_one.sh softload 1 0 A 0.30          # single_build/soft_load(A1)/AUTOLOAD/FILAMENT_RGB_OFF/AMS_A/ams_a_0.30f.bin
-#   bash build_one.sh p1s 0 1 D 0.80               # single_build/high_force_load(P1S)/NO_AUTOLOAD/FILAMENT_RGB_ON/AMS_D/ams_d_0.80f.bin
+#   bash build_one.sh standard 1 1 SOLO            # single_build/standard(A1)/AUTOLOAD/FILAMENT_RGB_ON/SOLO/solo_2.00f_auto.bin  （双开关自动回抽，忽略回抽长度）
+#   bash build_one.sh softload 1 0 A 0.30          # single_build/soft_load(A1)/AUTOLOAD/FILAMENT_RGB_OFF/AMS_A/ams_a_2.00f_auto.bin  （AUTOLOAD=1 忽略 0.30）
+#   bash build_one.sh p1s 0 1 D 0.80               # single_build/high_force_load(P1S)/NO_AUTOLOAD/FILAMENT_RGB_ON/AMS_D/ams_d_0.80f.bin  （单开关 NO_AUTOLOAD 仍需选回抽长度）
 #
 # 产物相对路径结构（子目录层级与固件命名）与 build_all_firmwares_softload.sh 完全一致，仅根目录为 single_build/，可直接并入 firmwares/ 后发布到 Releases。
 # 注意：不会删除现有 single_build/，只把单个固件放入对应位置。
@@ -55,14 +55,26 @@ esac
 
 [[ "${AUTOLOAD}" == "1" || "${AUTOLOAD}" == "0" ]] || { echo "ERROR: AUTOLOAD 必须是 1 | 0"; exit 1; }
 [[ "${RGB}" == "1" || "${RGB}" == "0" ]] || { echo "ERROR: RGB 必须是 1 | 0"; exit 1; }
-[[ -n "${RETRACT}" ]] || { echo "ERROR: 非 SOLO 槽位必须提供回抽长度(米)，如 0.30"; exit 1; }
+
+# --- 双开关自动回抽（AUTOLOAD=1）：忽略回抽长度参数，用 2.00m 作为安全上限 ---
+# 实际回抽到位由第二个微动开关 S2 自动判定，固件文件名带 _auto 后缀，无需用户选择回抽长度。
+if [[ "${AUTOLOAD}" == "1" ]]; then
+  RETRACT="2.00"
+  AUTO_SUFFIX="_auto"
+else
+  AUTO_SUFFIX=""
+fi
+
+if [[ "${AUTOLOAD}" == "0" ]]; then
+  [[ -n "${RETRACT}" ]] || { echo "ERROR: 非 SOLO 槽位必须提供回抽长度(米)，如 0.30"; exit 1; }
+fi
 
 # --- 目录与文件名（与批量脚本一致） ---
 if [[ "${SLOT}" == "SOLO" ]]; then
-  bin_name="solo_${RETRACT}f.bin"
+  bin_name="solo_${RETRACT}f${AUTO_SUFFIX}.bin"
 else
   slot_lower="${SLOT,,}"
-  bin_name="ams_${slot_lower}_${RETRACT}f.bin"
+  bin_name="ams_${slot_lower}_${RETRACT}f${AUTO_SUFFIX}.bin"
 fi
 dm_dir=$([[ "${AUTOLOAD}" == "1" ]] && echo AUTOLOAD || echo NO_AUTOLOAD)
 rgb_dir=$([[ "${RGB}" == "1" ]] && echo FILAMENT_RGB_ON || echo FILAMENT_RGB_OFF)

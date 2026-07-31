@@ -33,6 +33,12 @@ extern bool    filament_channel_inserted[4];
 #define BMCU_DM_TWO_MICROSWITCH 0
 #endif
 
+// 自动回抽（仅双微动开关版有效）：用第二个开关 S2 判断料根位置，无需在编译期选择回抽长度。
+// 默认随 BMCU_DM_TWO_MICROSWITCH 派生（双开关=1，单开关=0）；可用 -DBMCU_DM_AUTO_RETRACT=0 强制关闭。
+#ifndef BMCU_DM_AUTO_RETRACT
+#define BMCU_DM_AUTO_RETRACT (BMCU_DM_TWO_MICROSWITCH)
+#endif
+
 // platformio.ini: -DBMCU_ONLINE_LED_FILAMENT_RGB=1 (show filament RGB on ONLINE LED when loaded)
 #ifndef BMCU_ONLINE_LED_FILAMENT_RGB
 #define BMCU_ONLINE_LED_FILAMENT_RGB 0

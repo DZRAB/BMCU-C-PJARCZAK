@@ -7,11 +7,14 @@
 我该选哪个固件文件夹？
 在 SOLO、AMS_A、AMS_B、AMS_C、AMS_D 之间选择。
 
+注意：AUTOLOAD（双微动开关）固件文件名带 _auto 后缀（如 ams_a_2.00f_auto.bin），
+回抽长度由 S2 自动判定，无需选择；NO_AUTOLOAD（单开关）仍按下方回抽长度选择。
+
 --------------------------------------------------------------------------
 
 SOLO 固件
 示例文件：
-- solo_0.095f.bin
+- solo_0.095f.bin   （这是 NO_AUTOLOAD / 单开关板的 SOLO；AUTOLOAD / 双开关板的 SOLO 为 solo_2.00f_auto.bin，见上方说明）
 
 此固件用于单 BMCU（SOLO）运行。
 推荐用于单 BMCU 配置。
