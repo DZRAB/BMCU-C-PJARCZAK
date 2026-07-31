@@ -266,13 +266,13 @@ NVM 位于 Flash 末 **4KB 扇区**（`0x0800F000`，CH32V203C8 结束于 `0x080
 | 宏 | 含义 |
 |---|---|
 | `BAMBU_BUS_AMS_NUM` (0..3) | 本机在 AMS 链中的编号（AMS_A..D）；决定回复的 AMS 地址与 SN 后缀 |
-| `AMS_RETRACT_LEN` (米) | filament 回抽长度（从 AMS 分线器末端起算），如 SOLO=0.095 |
+| `AMS_RETRACT_LEN` (米) | filament 回抽长度（从 AMS 分线器末端起算）；SOLO 固定 0.095，AMS_A~D **支持 0.10~2.00 米（步长 5cm，共 39 档）**，可由编译参数/环境变量自定义 |
 | `BMCU_DM_TWO_MICROSWITCH` | DM 双微动开关板 + AUTOLOAD 辅助 |
 | `BMCU_P1S` | P1/P1S/X1 打印机适配（更长 PTFE 路径） |
 | `BMCU_SOFT_LOAD` | soft_load(A1)：更低装入力（弱弹簧单元） |
 | `BMCU_ONLINE_LED_FILAMENT_RGB` | 装入时 ONLINE LED 显示 filament RGB 颜色 |
 
-`env:fw` 通过环境变量注入上述宏；`env:moj` 为开发者默认（AMS_A，0.095m）。
+`env:fw` 通过环境变量注入上述宏；`env:moj` 为开发者默认（单 BMCU/SOLO，AMS 总线编号 0，回抽 0.095m）。
 
 ---
 

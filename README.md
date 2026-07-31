@@ -178,7 +178,7 @@ bash build_all_firmwares_softload.sh
 
 该脚本会生成 `firmwares/` 目录，包含三种模式（standard(A1) / soft_load(A1) / high_force_load(P1S)）下各 AUTOLOAD / RGB / slots 组合。
 
-> 如需更快的本地全量编译（780 个固件约 1 分钟，常规脚本需数小时），可用 [`build_all_firmwares_fast.py`](./build_all_firmwares_fast.py)（详见 [`编译指南.md`](./docs/编译指南.md) 第四节）。
+> 如需更快的本地全量编译（约 1884 个固件只需几分钟，常规脚本需数小时），可用 [`build_all_firmwares_fast.py`](./build_all_firmwares_fast.py)（详见 [`编译指南.md`](./docs/编译指南.md) 第四节）。
 
 单独补编某一个固件（不跑全量）用 `build_one.sh`，产物放在独立的 `single_build/` 目录，例如：
 
@@ -256,7 +256,7 @@ filament 回抽长度必须从打印机内部的 AMS 分线器末端算起
 计算你自己的回抽长度时：
 
 - 始终从 AMS 分线器末端起算
-- 加上所需距离，再根据你的配置加上约 9 cm
+- 加上从 BMCU 到 AMS 分线器末端的距离（示例约 9 cm），再额外加一点安全余量使 filament 清过分线器（约 0.5 cm）即可
 
 ---
 
@@ -268,6 +268,8 @@ filament 回抽长度必须从打印机内部的 AMS 分线器末端算起
 - 更长的 filament 回抽距离
 
 如果你想用更长的回抽以 SOLO 模式运行，请使用 AMS_A 而不是 SOLO。
+
+回抽长度（从 AMS 分线器末端起算）：**SOLO 固定 0.095 米（9.5 cm）；AMS_A~D 支持 0.10~2.00 米（步长 5cm，共 39 档）**，按你的 PTFE 实际长度选择对应档位（详见 `docs/编译指南.md`）。
 
 ---
 
