@@ -12,7 +12,7 @@
 //   1 = 开启温湿度探测模拟；0 = 关闭（sim_aht20_probe_step 变为空操作）。
 // 改完保存，重新编译即可。对所有编译方式（pio / 全量脚本 / 快速脚本）通用。
 // ⚠️ AHT20 实物焊接到位后，将本开关设为 0，恢复由真实传感器驱动温湿度上报。
-#define SIM_AHB_PROBE_ENABLE 1
+#define SIM_AHB_PROBE_ENABLE 0
 
 void sim_aht20_probe_step(void);
 
