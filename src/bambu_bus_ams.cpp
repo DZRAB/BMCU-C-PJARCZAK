@@ -6,6 +6,7 @@
 #include "app_api.h"
 #include "_bus_hardware.h"
 #include "crc_bus.h"
+#include "sim_aht20.h"
 
 uint8_t bambubus_ams_map[4] = {0, 1, 2, 3};
 static void bambubus_build_static_serial(void);
@@ -745,6 +746,10 @@ void get_package_stu_motion(bambubus_printer_stu_motion_package_struct *package_
             filament_flag_on |= (uint8_t)(1u << i);
 
     if (!set_motion(in.filamnet_channel, in.statu_flag, in.motion_flag, fixed_ams_num)) return;
+
+    // 每次响应打印机 filament_motion_long 查询时自增温湿度（探测打印机查询周期用）。
+    // 模拟是否生效由 src/sim_aht20.h 的 SIM_AHB_PROBE_ENABLE 开关控制，关闭时该函数为空操作。
+    sim_aht20_probe_step();
 
     auto *package_send = (bambubus_ams_stu_motion_package_struct *)out;
     memcpy(package_send, &_bambubus_ams_stu_motion_package_struct_init_data, sizeof(*package_send));

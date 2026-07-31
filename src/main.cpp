@@ -293,8 +293,9 @@ int main(void)
         }
 
         // ===== 软件模拟 AHT20 温湿度（测试用，无硬件时）=====
-        // ⚠️ AHT20 实物到位后请注释掉下面这一行，恢复真实传感器上报
-        sim_aht20_run();
+        // 探测模式下温湿度由 bambu_bus_ams.cpp 在每次响应打印机查询时
+        // 调用 sim_aht20_probe_step() 自增；无需在此周期调用。
+        // AHT20 实物到位后改用真实传感器，本模拟整体停用。
 
         Motion_control_run(error);
         RGB_update();
