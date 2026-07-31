@@ -166,9 +166,9 @@ static float g_pull_speed_set[4] = {-PULL_V_FAST,-PULL_V_FAST,-PULL_V_FAST,-PULL
 float MC_PULL_V_OFFSET[4]      = {0.0f, 0.0f, 0.0f, 0.0f};
 
 // ---- 双开关自动回抽（BMCU_DM_AUTO_RETRACT）----
-// 用 S2 开关判断料根位置：退料至 S2 释放(ks 1->2)，再正推至 S2 再按下(ks->1)即定位完成。
+// 用 S2 开关判断料根位置：退料至 S2 释放(ks 2->1，S1 仍触发)，再正推至 S2 再按下(ks->1)即定位完成。
 #if (BMCU_DM_AUTO_RETRACT + 0)
-static constexpr float AR_RESEAT_MAX_M = 0.05f; // 回推定位最大正推距离(米)，约5cm
+static constexpr float AR_RESEAT_MAX_M = 0.12f; // 回推定位最大正推距离(米)，12cm(与原版自动装载进料长度一致)
 static uint8_t dm_key_raw[4] = {0,0,0,0};        // 原始解码状态(供自检，不含手势覆盖)
 enum dm_autoretract_phase_enum { AR_IDLE, AR_RETRACT_WAIT_S2, AR_RESEAT_WAIT_S1S2 };
 static dm_autoretract_phase_enum dm_ar_phase[4] = {AR_IDLE,AR_IDLE,AR_IDLE,AR_IDLE};
@@ -207,10 +207,10 @@ static inline uint8_t dm_key_to_state(uint8_t ch, float v)
 {
     const float none_thr = MC_DM_KEY_NONE_THRESH[ch];
 
-    if (v < none_thr) return 0u;   // none
-    if (v > 1.7f)     return 1u;   // both
-    if (v > 1.4f)     return 2u;   // external only
-    return 3u;
+    if (v < none_thr) return 0u;   // none (两开关都没按, 0v)
+    if (v > 1.65f)   return 1u;    // both (S1+S2, 1.8v)
+    if (v > 1.25f)   return 2u;    // 仅 S1 进料口 (1.5v) = S2 已释放
+    return 3u;                     // 仅 S2 内侧 (1v) = 异常/进料中
 }
 
 // ---- DM autoload (two microswitch) ----
@@ -2152,6 +2152,11 @@ static auto dm_ar_finish_pullback = [](uint8_t i, uint64_t t_now) -> void
     filament_pull_back_target[i] = motion_control_pull_back_distance;
     dm_ar_phase[i] = AR_IDLE;
     dm_ar_freeze_report[i] = false; // 恢复对打印机上报
+    // 退料停在 ks==2（SW2 释放、仅 S1 被压），永远到不了 ks==0，
+    // 而 dm_autoload_gate 只会在 ks==0+idle 时复位。不清的话 dm_auto 的
+    // Stage1（S1_DEBOUNCE）会被永久挡住，导致退完不自动送料。
+    // 退料完成即主动放行，交 dm_auto 接管推送 12cm。
+    dm_autoload_gate[i] = 0u;
     filament_now_position[i] = filament_redetect;
 };
 #endif
@@ -2183,52 +2188,32 @@ static auto dm_ar_finish_pullback = [](uint8_t i, uint64_t t_now) -> void
             const uint8_t ks = dm_key_raw[i];           // 原始开关状态(未含手势覆盖)
             const float safety_max = motion_control_pull_back_distance; // 固定长度仅作安全上限
 
+            // SW2 释放判据：ks==3u(仅SW2内侧,1v)=仍压着；ks==2u(仅SW1进料口,1.5v)= SW2 已释放
+            // 注：机构内 S1 永远被 BMG 压着，退料不会到 ks==0，SW2 释放即 ks 由 1(both) 变 2(仅SW1)
+            const bool sw2_released = (ks == 2u);
+
             if (dm_ar_phase[i] == AR_RETRACT_WAIT_S2)
             {
                 const float d = absf(A.filament[i].meters - filament_pull_back_meters[i]);
 
-                if (ks == 0u)
+                if (sw2_released)
                 {
-                    // 料已完全退出(超过 S1)：按完整退料处理
+                    // 检测到 SW2 释放：退料到此为止，转 idle 交给原版 dm_auto 自动装载流程送料 12cm
                     dm_ar_finish_pullback(i, time_now);
-                }
-                else if (ks == 2u)
-                {
-                    // S2 释放(ks 1->2)：料根已退到 S2，转回推定位阶段
-                    dm_ar_phase[i] = AR_RESEAT_WAIT_S1S2;
-                    dm_ar_reseat_start_m[i] = A.filament[i].meters;
-                    dm_ar_reseat_cycles[i] = 0u;
-                    MOTOR_CONTROL[i].set_motion(filament_motion_enum::filament_motion_send, 100, time_now);
                 }
                 else if (d >= safety_max)
                 {
-                    // 安全上限兜底：未检测到 S2 释放，退回固定长度逻辑
                     dm_ar_finish_pullback(i, time_now);
                 }
                 else
                 {
-                    // 继续退料（末端线性减速）
                     const float remain = safety_max - d;
                     const float k = clampf(remain / PULL_RAMP_M, 0.0f, 1.0f);
-                    const float v = PULL_V_END + (PULL_V_FAST - PULL_V_END) * k; // mm/s
+                    const float v = PULL_V_END + (PULL_V_FAST - PULL_V_END) * k;
                     g_pull_remain_m[i] = (remain > 0.0f) ? remain : 0.0f;
                     g_pull_speed_set[i] = -v;
                     MOTOR_CONTROL[i].set_motion(filament_motion_enum::filament_motion_pull, 100, time_now);
                 }
-            }
-            else // AR_RESEAT_WAIT_S1S2
-            {
-                dm_ar_reseat_cycles[i]++;
-                if (ks == 1u || dm_ar_reseat_cycles[i] >= 200u)
-                {
-                    // S2 再次按下(料根刚好越过 S2、仍被 BMG 咬住)或超时：定位完成
-                    dm_ar_finish_pullback(i, time_now);
-                }
-                else if (absf(A.filament[i].meters - dm_ar_reseat_start_m[i]) >= AR_RESEAT_MAX_M)
-                {
-                    dm_ar_finish_pullback(i, time_now); // 距离兜底
-                }
-                // 否则 send 运动持续运行，直到上述条件满足
             }
 #else
             // ---- 原有固定长度回抽（单开关 / 自动回抽关闭）----
@@ -2377,6 +2362,10 @@ static void motor_motion_switch(uint64_t time_now)
 #endif
 
                 filament_pull_back_meters[num] = A.filament[num].meters;
+
+#if (BMCU_DM_AUTO_RETRACT + 0)
+                dm_loaded[num] = 0u; // 退料后清空装载标志，交 dm_auto 重新送料定位
+#endif
 
                 float target;
                 if (g_on_use_jam_latch[num])
