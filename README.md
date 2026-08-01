@@ -5,12 +5,18 @@
 - 固件向打印机上报的版本号保持 `10.50`（原作者 V10.5），以维持打印机兼容性识别。
 - 本仓库自身的迭代使用 git 标签管理（如 `v1.0-baseline`、`v2.0-aht20`、`v2.1-aht20`），后续版本递增。
 
-## 当前版本：v3.0-autoretract（双开关自动回抽）
+## 当前版本：v3.1-autoretract（双开关自动回抽，v3.0 修复迭代版）
 
-在 v2.1-aht20 基础上新增 **双开关自动回抽**：退料时用第二个微动开关 S2 自动判定料根位置，无需在编译期选择回抽长度（固件文件名带 `_auto` 后缀，`2.00` 仅作安全上限）。双开关固件矩阵精简为每槽 1 个（共 30 个）；单开关（NO_AUTOLOAD）仍保留全回抽长度矩阵（942 个）。
+在 v3.0-autoretract 基础上修复并迭代：**双开关自动回抽的退料后自动送料流程**已修复（v3.0 在部分退料场景下退完不自动前推送料，v3.1 已修正）。其余特性不变——退料时用第二个微动开关 S2 自动判定料根位置，无需在编译期选择回抽长度（固件文件名带 `_auto` 后缀，`2.00` 仅作安全上限）。默认双开关固件矩阵精简为每槽 1 个（共 30 个）；单开关（NO_AUTOLOAD）仍保留全回抽长度矩阵（942 个），两者合计 972 个。若需双开关也出固定回抽长度矩阵（如 S2 不可靠），设 `AUTO_RETRACT=0` 编译，双开关同样出 39 档（总数变为 1884）。
+
+> 发布固件分为两个包：**自动回抽长度包**（双开关默认 `_auto` 固件 + 单开关固定长度矩阵）与**固定回抽长度包**（全部硬件按固定长度编译），详见 Releases 发布说明。
+
+### v3.1-autoretract 更新说明
+- **修复双开关自动回抽退料后不自动送料**：v3.0 在「退料到 S2 释放」的场景下，退完后不会自动向前送料就位，需手动干预；v3.1 已修正，退料完成后自动接管送料流程，无需手动操作。
+- 其余特性与 v3.0 一致（见下）。
 
 ### v3.0-autoretract 更新说明
-- **新增双开关自动回抽（`BMCU_DM_AUTO_RETRACT`）**：见上。仅双微动开关板有效；自动回抽期间冻结对打印机上报，多重兜底（超距/超时）防卡死。可通过 `-DBMCU_DM_AUTO_RETRACT=0` 关闭，退化回固定长度逻辑。
+- **新增双开关自动回抽（`BMCU_DM_AUTO_RETRACT`）**：见上。仅双微动开关板有效；自动回抽期间冻结对打印机上报，多重兜底（超距）防卡死。可通过 `-DBMCU_DM_AUTO_RETRACT=0` 关闭，改用固定回抽长度。
 
 ### v2.1-aht20 更新说明
 - **修复快速编译固件不可用**：修复 `build_all_firmwares_fast.py` 生成的固件无法正常工作的问题（v2.0-aht20 发布的固件已作废），固件已测试可用。
@@ -183,12 +189,13 @@ bash build_all_firmwares_softload.sh
 
 该脚本会生成 `firmwares/` 目录，包含三种模式（standard(A1) / soft_load(A1) / high_force_load(P1S)）下各 AUTOLOAD / RGB / slots 组合。
 
-> 如需更快的本地全量编译（约 972 个固件只需几分钟，常规脚本需数小时），可用 [`build_all_firmwares_fast.py`](./build_all_firmwares_fast.py)（详见 [`编译指南.md`](./docs/编译指南.md) 第四节）。
+> 如需更快的本地全量编译（默认约 972 个固件只需几分钟，常规脚本需数小时），可用 [`build_all_firmwares_fast.py`](./build_all_firmwares_fast.py)（详见 [`编译指南.md`](./docs/编译指南.md) 第四节）。若双开关板也想要固定回抽长度矩阵（如 S2 不可靠），设 `AUTO_RETRACT=0` 运行该脚本，双开关同样出 39 档（总数 1884）。
 
 单独补编某一个固件（不跑全量）用 `build_one.sh`，产物放在独立的 `single_build/` 目录，例如：
 
 ```bash
 bash build_one.sh softload 1 0 A 0.30   # AUTOLOAD=1(双开关)：single_build/soft_load(A1)/AUTOLOAD/FILAMENT_RGB_OFF/AMS_A/ams_a_2.00f_auto.bin （0.30 被忽略，回抽由 S2 自动判定）
+bash build_one.sh standard 1 1 A 0.30 0  # AUTOLOAD=1 + AUTO_RETRACT=0：ams_a_0.30f.bin（双开关固定回抽长度模式，0.30 生效）
 ```
 
 - 单变体编译、手动 `pio run -e fw` 传参、`build_one.sh` 参数说明，详见 **[`编译指南.md`](./docs/编译指南.md)**。

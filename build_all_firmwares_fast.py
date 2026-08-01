@@ -4,8 +4,10 @@
 BMCU 固件高速批量编译工具（适配本仓库 BMCU-C）
 
 在保持与 build_all_firmwares_softload.sh 完全一致的输出目录结构、文件命名与
-manifest.txt 校验清单的前提下，将约 780 个固件的编译时间从数小时（常规脚本实测）
-缩短到约 1 分钟以内（本机实测约 40~50 秒，含参数提取；首次运行需下载工具链会更久）。
+manifest.txt 校验清单的前提下，将默认 972 个固件（双开关自动回抽 30 + 单开关 942）
+的编译时间从数小时（常规脚本实测）缩短到约 1 分钟以内（本机实测约 40~50 秒，
+含参数提取；首次运行需下载工具链会更久）。设 AUTO_RETRACT=0 时双开关也出固定
+长度矩阵，总数 1884 个，耗时相应增加。
 
 加速原理：
   1. pio run -e moj -v 提取工具链路径与编译/链接命令行（带缓存，platformio.ini 未改动时复用）
@@ -449,16 +451,24 @@ log("  第三步：收集任务 & 创建输出目录")
 log("=" * 60)
 
 tasks = []
-# 双开关(AUTOLOAD=1)：自动回抽，每槽仅 1 个固件（2.00m 仅作安全上限，实际长度由 S2 自动判定）
-# 单开关(NO_AUTOLOAD=0)：保留全部回抽长度矩阵（与旧版一致，供 Release 发布）
+# 双开关(AUTOLOAD=1)：
+#   AUTO_RETRACT=1（默认）：自动回抽，每槽仅 1 个固件（xxx_2.00f_auto.bin）。
+#       编译时注入 -DBMCU_DM_AUTO_RETRACT=1，实际回抽长度由 S2 自动判定。
+#   AUTO_RETRACT=0（固定长度模式）：双开关也按固定回抽长度，每槽产全长度矩阵（xxx_<len>f.bin），
+#       与 2.0 一致（不注入该宏，走 #else 固定长度分支）。
+# 单开关(NO_AUTOLOAD=0)：始终保留全部回抽长度矩阵（与旧版一致，不受 AUTO_RETRACT 影响）。
 AUTO_RETRACT_CAP = "2.00"
+# 双开关是否启用自动回抽（默认 1；设为 0 则双开关也按固定长度矩阵编译）
+auto_retract = int(os.environ.get("AUTO_RETRACT", "1"))
+log(f"  双开关自动回抽 AUTO_RETRACT = {auto_retract} "
+    f"({'自动回抽 _auto 模式' if auto_retract else '固定长度矩阵模式'})")
 for mode_dir, p1s, soft_load in MODES:
     for dm in (1, 0):
         dm_dir = "AUTOLOAD" if dm == 1 else "NO_AUTOLOAD"
         for rgb in (1, 0):
             rgb_dir = "FILAMENT_RGB_ON" if rgb == 1 else "FILAMENT_RGB_OFF"
             base = os.path.join(OUT_DIR, mode_dir, dm_dir, rgb_dir)
-            if dm == 1:
+            if dm == 1 and auto_retract:
                 # 双开关自动回抽：SOLO + AMS_A~D 各 1 个
                 tasks.append((os.path.join(base, "SOLO", f"solo_{AUTO_RETRACT_CAP}f_auto.bin"),
                               0, f"{AUTO_RETRACT_CAP}f", dm, rgb, p1s, soft_load))
@@ -466,7 +476,7 @@ for mode_dir, p1s, soft_load in MODES:
                     tasks.append((os.path.join(base, f"AMS_{slot}", f"ams_{slot.lower()}_{AUTO_RETRACT_CAP}f_auto.bin"),
                                   ams_num, f"{AUTO_RETRACT_CAP}f", dm, rgb, p1s, soft_load))
             else:
-                # 单开关：全回抽长度矩阵
+                # 单开关固定矩阵 / 双开关固定长度模式：全回抽长度矩阵
                 tasks.append((os.path.join(base, "SOLO", f"solo_{SOLO_RETRACT}.bin"),
                               0, SOLO_RETRACT, dm, rgb, p1s, soft_load))
                 for slot, ams_num in (("A", 0), ("B", 1), ("C", 2), ("D", 3)):
@@ -528,7 +538,7 @@ def compile_one(compiler, flags, src, obj_path):
 
 
 def variant_defines(dm, rgb, p1s, soft_load, ams_num, retract="0.095f"):
-    return [
+    defines = [
         f"-DBMCU_DM_TWO_MICROSWITCH={dm}",
         f"-DBMCU_ONLINE_LED_FILAMENT_RGB={rgb}",
         f"-DBMCU_P1S={p1s}",
@@ -536,6 +546,12 @@ def variant_defines(dm, rgb, p1s, soft_load, ams_num, retract="0.095f"):
         f"-DBAMBU_BUS_AMS_NUM={ams_num}",
         f"-DAMS_RETRACT_LEN={retract}",
     ]
+    # 双开关 + 固定长度模式：显式注入 =0，强制走固定长度分支（等价 2.0）
+    # 不注入时，宏由 Motion_control.h 派生为 BMCU_DM_TWO_MICROSWITCH（双开关=1=自动回抽），
+    # 即默认行为。切勿注入空值或 =1，以免覆盖 .h 的派生定义。
+    if dm == 1 and not auto_retract:
+        defines.append("-DBMCU_DM_AUTO_RETRACT=0")
+    return defines
 
 
 def vkey_of(dm, rgb, p1s, soft_load, ams_num):

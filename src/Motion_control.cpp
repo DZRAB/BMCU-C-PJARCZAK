@@ -166,15 +166,12 @@ static float g_pull_speed_set[4] = {-PULL_V_FAST,-PULL_V_FAST,-PULL_V_FAST,-PULL
 float MC_PULL_V_OFFSET[4]      = {0.0f, 0.0f, 0.0f, 0.0f};
 
 // ---- 双开关自动回抽（BMCU_DM_AUTO_RETRACT）----
-// 用 S2 开关判断料根位置：退料至 S2 释放(ks 2->1，S1 仍触发)，再正推至 S2 再按下(ks->1)即定位完成。
+// 用 S2 开关判断料根位置：退料至 SW2 释放(ks 1->2，仅 S1 仍触发)即停，然后交 dm_auto 自动装载送料 12cm。
 #if (BMCU_DM_AUTO_RETRACT + 0)
-static constexpr float AR_RESEAT_MAX_M = 0.12f; // 回推定位最大正推距离(米)，12cm(与原版自动装载进料长度一致)
 static uint8_t dm_key_raw[4] = {0,0,0,0};        // 原始解码状态(供自检，不含手势覆盖)
-enum dm_autoretract_phase_enum { AR_IDLE, AR_RETRACT_WAIT_S2, AR_RESEAT_WAIT_S1S2 };
+enum dm_autoretract_phase_enum { AR_IDLE, AR_RETRACT_WAIT_S2 };
 static dm_autoretract_phase_enum dm_ar_phase[4] = {AR_IDLE,AR_IDLE,AR_IDLE,AR_IDLE};
 static bool dm_ar_freeze_report[4] = {false,false,false,false}; // 自检期间冻结对打印机上报
-static float dm_ar_reseat_start_m[4] = {0,0,0,0};
-static uint16_t dm_ar_reseat_cycles[4] = {0,0,0,0};
 #endif
 float MC_PULL_V_MIN[4]         = {1.00f, 1.00f, 1.00f, 1.00f};
 float MC_PULL_V_MAX[4]         = {2.00f, 2.00f, 2.00f, 2.00f};

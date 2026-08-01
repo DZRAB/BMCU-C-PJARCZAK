@@ -235,16 +235,16 @@ AHUB 用 `CRC->DATAR` 硬件 CRC 外设做 32 位校验（`ahubus_package_add_cr
 
 宏 `BMCU_DM_AUTO_RETRACT` 默认随 `BMCU_DM_TWO_MICROSWITCH` 派生（双开关=1 开、单开关=0 关）；即双开关板默认开启自动回抽、单开关板本就关闭。它仅由双开关派生得到，可用 `-DBMCU_DM_AUTO_RETRACT=0` 在编译期强制关闭。
 
-> **关闭 = 退回 v2.0 式固定长度（fallback / 逃生口）**：`BMCU_DM_AUTO_RETRACT=0` 让双开关板放弃 S2 自动判定，退化回 6.2 的固定长度逻辑——此时 `AMS_RETRACT_LEN`（编译进去的回抽长度）从“安全上限”变回“真实回抽目标长度”，且必须像 `NO_AUTOLOAD` 那样编译全长度矩阵。也就是说，它实质上把双开关板**还原成 v3.0 之前的固定长度行为**。
-> 那它有什么实际用处？单开关板（`NO_AUTOLOAD`）本来就提供固定长度全矩阵，所以**绝大多数情况你不需要关它**；唯一不被冗余覆盖的场景是：**双开关硬件（不能刷 `NO_AUTOLOAD` 固件）却想要固定长度回抽**——例如该机器的 S2 传感不可靠、或你就是偏好某个固定长度。除此之外，它只是无害的代码级逃生口（用 `#ifndef` 定义、默认干净派生），v3.0 编译脚本默认不暴露此开关、双开关统一按自动回抽（30 个 `_auto.bin`）发布。
+> **关闭 = 固定回抽长度模式**：`BMCU_DM_AUTO_RETRACT=0` 让双开关板放弃 S2 自动判定，走固定回抽长度逻辑——此时 `AMS_RETRACT_LEN`（编译进去的回抽长度）从“安全上限”变回“真实回抽目标长度”，且必须像 `NO_AUTOLOAD` 那样编译全长度矩阵。
+> 那它有什么实际用处？单开关板（`NO_AUTOLOAD`）本来就提供固定长度全矩阵，所以**绝大多数情况你不需要关它**；唯一不被冗余覆盖的场景是：**双开关硬件（不能刷 `NO_AUTOLOAD` 固件）却想要固定长度回抽**——例如该机器的 S2 传感不可靠、或你就是偏好某个固定长度。除此之外，它只是无害的代码级开关（用 `#ifndef` 定义、默认干净派生）；v3.0 已暴露该开关：`build_one.sh` 第 6 参数 `AUTO_RETRACT=0`、`build_all_firmwares_fast.py` 环境变量 `AUTO_RETRACT=0` 均可触发，触发后双开关也出 39 档固定长度矩阵（总固件数从默认 30 升到 942，全量合计 1884）。`build_all_firmwares_softload.sh` 则固定只出双开关自动回抽版（不读该开关）。
 
 原理：回抽（`pull_back`）时不再依赖编译期固定的 `AMS_RETRACT_LEN`，而是用第二个微动开关 S2 判定料根位置：
 
 1. 进入回抽即**冻结** `MC_ONLINE_key_stu` 对打印机的上报（避免 S2 跳变误触发打印机逻辑），自检改用**原始开关状态** `dm_key_raw`（不含手势覆盖）。
-2. 子状态 `AR_RETRACT_WAIT_S2`：持续退料，直到 `ks` 由“两开关都按（状态 1）”变为“仅 S1 按下（状态 2）”——即 S2 释放，表示料根已退到 S2 处。
-3. 子状态 `AR_RESEAT_WAIT_S1S2`：正推（`filament_motion_send`）约 5cm（上限 `AR_RESEAT_MAX_M=0.05m`），直到 S2 再次被触发（`ks` 回 1，料根刚好越过 S2、仍被 BMG 咬住）即定位完成。
+2. 子状态 `AR_RETRACT_WAIT_S2`：持续退料，直到 `ks` 由“两开关都按（状态 1）”变为“仅 S1 按下（状态 2）”——即 S2 释放，表示料根已退到 S2 处，退料到此为止。
+3. 退料完成后由 `dm_ar_finish_pullback()` **主动放行** `dm_autoload_gate`：机构内 S1 永远被 BMG 压着，退料不会回到 `ks==0`，而 `dm_autoload_gate` 只在 `ks==0+idle` 时复位，不清的话 `dm_auto` 的 Stage1（S1_DEBOUNCE）会被永久挡住、导致退完不自动送料。放行后交回原版 `dm_auto` 自动装载流程：压上 S2 变 `ks==1`、自动再送约 12cm 就位。
 
-多重兜底：`AMS_RETRACT_LEN`（编译为 `2.00f`）作为安全上限，若退料超过该距离仍未检测到 S2 释放，或回推超距/超时（200 周期），自动停电机并进入 `filament_redetect`，绝不卡死。状态机顶部有保护：若因中断等离开回抽状态，立即解冻上报、复位自检相位，防止冻结卡死。
+多重兜底：`AMS_RETRACT_LEN`（编译为 `2.00f`）作为安全上限，若退料超过该距离仍未检测到 S2 释放，自动停电机并进入 `filament_redetect`，绝不卡死。状态机顶部有保护：若因中断等离开回抽状态，立即解冻上报、复位自检相位，防止冻结卡死。
 
 > 单开关板只有 1 个开关，无法用 S2 判定料根，**自动回抽无效**，仍走固定长度逻辑（需按 PTFE 长度编译对应固件）。
 
@@ -285,7 +285,7 @@ NVM 位于 Flash 末 **4KB 扇区**（`0x0800F000`，CH32V203C8 结束于 `0x080
 | `BAMBU_BUS_AMS_NUM` (0..3) | 本机在 AMS 链中的编号（AMS_A..D）；决定回复的 AMS 地址与 SN 后缀 |
 | `AMS_RETRACT_LEN` (米) | filament 回抽长度（从 AMS 分线器末端起算）；SOLO 固定 0.095，AMS_A~D **支持 0.10~2.00 米（步长 5cm，共 39 档）**，可由编译参数/环境变量自定义 |
 | `BMCU_DM_TWO_MICROSWITCH` | DM 双微动开关板 + AUTOLOAD 辅助 |
-| `BMCU_DM_AUTO_RETRACT` | 自动回抽（默认随 `BMCU_DM_TWO_MICROSWITCH` 派生：双开关=1 开、单开关=0 关）；双开关用 S2 判定料根、无需固定回抽长度；`-D` 置 0 可强制关闭，双开关退回 v2.0 固定长度逻辑 |
+| `BMCU_DM_AUTO_RETRACT` | 自动回抽（默认随 `BMCU_DM_TWO_MICROSWITCH` 派生：双开关=1 开、单开关=0 关）；双开关用 S2 判定料根、无需固定回抽长度；`-D` 置 0 可强制关闭，双开关改用固定回抽长度（须编译全长度矩阵） |
 | `BMCU_P1S` | P1/P1S/X1 打印机适配（更长 PTFE 路径） |
 | `BMCU_SOFT_LOAD` | soft_load(A1)：更低装入力（弱弹簧单元） |
 | `BMCU_ONLINE_LED_FILAMENT_RGB` | 装入时 ONLINE LED 显示 filament RGB 颜色 |
@@ -301,7 +301,6 @@ NVM 位于 Flash 末 **4KB 扇区**（`0x0800F000`，CH32V203C8 结束于 `0x080
 | `PULL_V_FAST` | 60 mm/s | 回抽起始速度 |
 | `PULL_V_END` | 12 mm/s | 末端速度 |
 | `PULL_RAMP_M` | 0.015 m | 末端线性减速区(15mm) |
-| `AR_RESEAT_MAX_M` | 0.05 m | 自动回抽回推定位上限(5cm)：退到 S2 释放后正推的最大距离 |
 | `PULL_PWM_MIN` | 400 | 回抽最小 PWM（“顶推”） |
 | `kAS5600_MM_PER_CNT` | −(π·7.5)/4096 | 角度→距离换算 |
 | `kAS5600_FAIL_TRIP` / `OK_RECOVER` | 3 / 2 | 传感器离线判定/恢复 |

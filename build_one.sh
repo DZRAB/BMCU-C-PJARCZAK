@@ -7,19 +7,20 @@
 #   - 本脚本用 single_build/（单独补编专用，同样被 .gitignore 忽略，不与 firmwares/ 混淆）
 #
 # 用法：
-#   bash build_one.sh <MODE> <AUTOLOAD> <RGB> <SLOT> <RETRACT>
+#   bash build_one.sh <MODE> <AUTOLOAD> <RGB> <SLOT> <RETRACT> [AUTO_RETRACT]
 #
 # 参数：
 #   MODE      standard | p1s | softload   （分别对应 standard(A1) / high_force_load(P1S) / soft_load(A1)）
-#   AUTOLOAD  1 | 0                        （1=双微动开关板，开启 AUTOLOAD + 自动回抽；0=单微动开关板）
+#   AUTOLOAD  1 | 0                        （1=双微动开关板；0=单微动开关板）
 #   RGB       1 | 0                        （1=ONLINE LED 显示 filament RGB）
 #   SLOT      SOLO | A | B | C | D         （AMS 槽位；SOLO 回抽默认 0.095）
-#   RETRACT   回抽长度(米)，如 0.30         （SOLO 可省略，默认 0.095；AUTOLOAD=1 时忽略此参数，回抽由 S2 自动判定）
+#   RETRACT   回抽长度(米)，如 0.30         （SOLO 可省略，默认 0.095；AUTOLOAD=1 且 AUTO_RETRACT=1 时忽略，回抽由 S2 自动判定）
+#   AUTO_RETRACT  (可选) 1 | 0              （默认 1；仅对 AUTOLOAD=1 生效。1=自动回抽 _auto；0=双开关也按固定长度矩阵编译，与 2.0 一致）
 #
 # 示例：
-#   bash build_one.sh standard 1 1 SOLO            # single_build/standard(A1)/AUTOLOAD/FILAMENT_RGB_ON/SOLO/solo_2.00f_auto.bin  （双开关自动回抽，忽略回抽长度）
-#   bash build_one.sh softload 1 0 A 0.30          # single_build/soft_load(A1)/AUTOLOAD/FILAMENT_RGB_OFF/AMS_A/ams_a_2.00f_auto.bin  （AUTOLOAD=1 忽略 0.30）
-#   bash build_one.sh p1s 0 1 D 0.80               # single_build/high_force_load(P1S)/NO_AUTOLOAD/FILAMENT_RGB_ON/AMS_D/ams_d_0.80f.bin  （单开关 NO_AUTOLOAD 仍需选回抽长度）
+#   bash build_one.sh standard 1 1 SOLO            # 双开关自动回抽 -> solo_2.00f_auto.bin（忽略回抽长度，S2 自动判定）
+#   bash build_one.sh standard 1 1 A  0.30 0       # 双开关固定长度模式 -> ams_a_0.30f.bin（同 2.0）
+#   bash build_one.sh p1s 0 1 D 0.80               # 单开关 NO_AUTOLOAD 仍需选回抽长度 -> ams_d_0.80f.bin
 #
 # 产物相对路径结构（子目录层级与固件命名）与 build_all_firmwares_softload.sh 完全一致，仅根目录为 single_build/，可直接并入 firmwares/ 后发布到 Releases。
 # 注意：不会删除现有 single_build/，只把单个固件放入对应位置。
@@ -34,6 +35,7 @@ AUTOLOAD="${2:-1}"
 RGB="${3:-1}"
 SLOT="${4:-SOLO}"
 RETRACT="${5:-}"
+AUTO_RETRACT="${6:-1}"
 
 # --- 模式映射 ---
 case "${MODE}" in
@@ -56,13 +58,21 @@ esac
 [[ "${AUTOLOAD}" == "1" || "${AUTOLOAD}" == "0" ]] || { echo "ERROR: AUTOLOAD 必须是 1 | 0"; exit 1; }
 [[ "${RGB}" == "1" || "${RGB}" == "0" ]] || { echo "ERROR: RGB 必须是 1 | 0"; exit 1; }
 
-# --- 双开关自动回抽（AUTOLOAD=1）：忽略回抽长度参数，用 2.00m 作为安全上限 ---
+# --- 双开关自动回抽（AUTOLOAD=1 且 AUTO_RETRACT=1）：忽略回抽长度参数，用 2.00m 作为安全上限 ---
 # 实际回抽到位由第二个微动开关 S2 自动判定，固件文件名带 _auto 后缀，无需用户选择回抽长度。
-if [[ "${AUTOLOAD}" == "1" ]]; then
+# AUTO_RETRACT=0（固定长度模式）：双开关也按固定长度矩阵编译，与 2.0 一致，文件名不带 _auto。
+if [[ "${AUTOLOAD}" == "1" && "${AUTO_RETRACT}" == "0" ]]; then
+  # 双开关固定长度模式：注入 =0 强制走固定长度分支（等价 2.0），必须提供回抽长度
+  RETRACT="${RETRACT:-0.095}"
+  AUTO_SUFFIX=""
+  AUTO_RETRACT_FLAG="0"
+  [[ -n "${RETRACT}" ]] || { echo "ERROR: AUTO_RETRACT=0 时双开关必须提供回抽长度(米)，如 0.30"; exit 1; }
+else
+  # AUTO_RETRACT 缺省或=1：自动回抽（_auto）。宏不注入，由 Motion_control.h 派生为
+  # BMCU_DM_TWO_MICROSWITCH（双开关=1），即默认自动回抽行为。
   RETRACT="2.00"
   AUTO_SUFFIX="_auto"
-else
-  AUTO_SUFFIX=""
+  AUTO_RETRACT_FLAG=""
 fi
 
 if [[ "${AUTOLOAD}" == "0" ]]; then
@@ -89,6 +99,7 @@ BMCU_DM_TWO_MICROSWITCH="${AUTOLOAD}" \
 BMCU_ONLINE_LED_FILAMENT_RGB="${RGB}" \
 DBMCU_P1S="${p1s}" \
 BMCU_SOFT_LOAD="${softload}" \
+BMCU_DM_AUTO_RETRACT="${AUTO_RETRACT_FLAG}" \
 pio run -e fw
 
 src=".pio/build/fw/firmware.bin"
