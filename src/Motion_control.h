@@ -5,6 +5,7 @@
 void Motion_control_init();
 void Motion_control_set_PWM(uint8_t CHx, int PWM);
 void Motion_control_run(int error);
+void Motion_control_request_stop_dm_autoload(uint8_t ch); // v3.2: 打印机暂停/停止时中止 DM 自动装载送料(Bug1)
 bool Motion_control_save_dm_key_none_thresholds(void);
 
 void MC_PULL_detect_channels_inserted();

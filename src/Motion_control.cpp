@@ -188,6 +188,15 @@ static uint8_t  MC_ONLINE_key_stu[4]    = {0, 0, 0, 0};
 static uint8_t  g_on_use_low_latch[4]   = {0, 0, 0, 0};   // 1=stop motor latch
 static uint8_t  g_on_use_jam_latch[4]   = {0, 0, 0, 0};   // 1=real jam -> 0xF06F
 static uint32_t g_on_use_hi_pwm_us[4]   = {0u, 0u, 0u, 0u};
+static uint32_t g_on_use_full_ms[4]     = {0u, 0u, 0u, 0u}; // v3.2: 缓冲顶满持续毫秒(黄灯三步法)
+static uint8_t  g_dm_autoload_stop_req[4] = {0u, 0u, 0u, 0u}; // v3.2: 打印机暂停/停止时请求中止 DM 自动装载送料
+
+// v3.2: 由 bambu_bus_ams.cpp 在收到打印机暂停/停止指令时调用, 请求中止对应通道正在进行的 DM 自动装载送料
+void Motion_control_request_stop_dm_autoload(uint8_t ch)
+{
+    if (ch < 4u)
+        g_dm_autoload_stop_req[ch] = 1u;
+}
 
 static inline __attribute__((always_inline)) void MC_STU_RGB_set_latch(uint8_t ch, uint8_t r, uint8_t g, uint8_t b, uint64_t now_ms, uint8_t blink)
 {
@@ -1093,6 +1102,21 @@ public:
                         auto &A = ams[motion_control_ams_num];
                         const float cur_m = A.filament[CHx].meters;
 
+                        // v3.2: 打印机发来暂停/停止时, 若正在自动回抽后的送料, 立刻退出并停机
+                        if (g_dm_autoload_stop_req[CHx])
+                        {
+                            g_dm_autoload_stop_req[CHx] = 0u;
+                            PID_speed.clear();
+                            PID_pressure.clear();
+                            x_prev[CHx] = 0.0f;
+                            dm_auto_state[CHx] = DM_AUTO_IDLE;
+                            dm_autoload_active = false;
+                            dm_autoload_x = 0.0f;
+                            dm_autoload_gate[CHx] = 0u;
+                            Motion_control_set_PWM(CHx, 0);
+                            return;   // 直接停机, 不再继续送料
+                        }
+
                         if (dm_fail_latch[CHx])
                         {
                             dm_autoload_active = true;
@@ -1560,6 +1584,7 @@ public:
                     PID_pressure.clear();
                     on_use_need_move = false;
                     on_use_abs_err   = 0.0f;
+                    g_on_use_full_ms[CHx] = 0u;   // 缓冲回落到正常带内, 清顶满计时(恢复绿灯)
                 }
                 else if (pct < (target_pct - MC_ON_USE_BAND_LO_DELTA))
                 {
@@ -1586,23 +1611,42 @@ public:
                     const float err = pct - target_pct;
                     on_use_abs_err = (err < 0.0f) ? -err : err;
 
-                    x = dir * PID_pressure.caculate(err, time_E);
+                    // v3.2: 缓冲头被顶满(过五通/送进挤出机阻力)时的黄灯三步避让法。
+                    // 顶满累计计时, 回落到正常带内已在上面清零(恢复绿灯)。
+                    g_on_use_full_ms[CHx] += (uint32_t)(time_E * 1000.0f + 0.5f);
+                    const uint32_t t_full = g_on_use_full_ms[CHx];
 
-                    float lim_f = 500.0f + 80.0f * on_use_abs_err;
-                    if (lim_f > 900.0f) lim_f = 900.0f;
+                    // 超过 5 秒仍顶满 = 真堵, 停机报红灯(与现有堵料红灯逻辑一致)
+                    if (t_full >= 5000u)
+                    {
+                        auto &A = ams[motion_control_ams_num];
+                        g_on_use_jam_latch[CHx] = 1u;
+                        if (A.now_filament_num == (uint8_t)CHx)
+                            A.pressure = 0xF06Fu;
+                        MC_STU_RGB_set(CHx, 0xFFu, 0x00u, 0x00u);
+                        PID_speed.clear();
+                        PID_pressure.clear();
+                        pwm_zeroed = 1;
+                        x_prev[CHx] = 0.0f;
+                        Motion_control_set_PWM(CHx, 0);
+                        return;
+                    }
+
+                    // 顶满但 <5s: 亮黄灯(保护避让, 不是故障)
+                    MC_STU_RGB_set(CHx, 0xFFu, 0xFFu, 0x00u);
+
+                    // 第 1 段(0~2s): 用中等力气往前推一把, 协助顶过五通/送进挤出机
+                    // 第 2 段(2~5s): 力气减到很小, 只保持不后退, 等打印机把料拉走
+                    float lim_f;
+                    if (t_full < 2000u)
+                        lim_f = 600.0f;          // 中力推一把
+                    else
+                        lim_f = 180.0f;          // 轻压保持
+
+                    x = dir * PID_pressure.caculate(err, time_E);
 
                     if (x >  lim_f) x =  lim_f;
                     if (x < -lim_f) x = -lim_f;
-
-                    constexpr float retrig = 55.0f;
-                    if (err > 0.0f && pct >= retrig)
-                    {
-                        float mul = 1.0f + 0.5f * (pct - retrig);
-                        if (mul > 3.0f) mul = 3.0f;
-                        x *= mul;
-                        if (x >  950.0f) x =  950.0f;
-                        if (x < -950.0f) x = -950.0f;
-                    }
                 }
             }
             else

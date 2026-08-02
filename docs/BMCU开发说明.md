@@ -25,9 +25,9 @@ BMCU-C 是 **Bambu Lab AMS（自动多色换料系统）的开源替代固件**�
 本仓库（BMCU-C）基于原作者 **jarczakpawel** 的 BMCU 固件（基线 **V10.5**）二次开发：
 
 - 固件向打印机上报的版本号保持 `10.50`（原作者 V10.5），以维持打印机兼容性识别。
-- 本仓库自身的迭代使用 git 标签管理（如 `v1.0-baseline`、`v2.0-aht20`、`v2.1-aht20`），后续版本递增。
+- 本仓库自身的迭代使用 git 标签管理（如 `v1.0-baseline`、`v2.0-aht20`、`v2.1-aht20`、`v3.0-autoretract`、`v3.1-autoretract`、`v3.2-fix105`），后续版本递增。
 
-其中 `v1.0-baseline` 是基于原作者 V10.5 整理出的可编译、有中文文档的干净基线（修复编译问题、新增编译脚本与说明文档），作为后续开发的起点；`v2.0-aht20` 在其基础上新增 AHT20 温湿度传感器支持（见第 7 章），最新 `v2.1-aht20` 在此基础上新增温湿度探测模式（见第 6 章使用指南）。回退到基线：`git checkout v1.0-baseline`。使用与固件选型见 [`BMCU使用指南.md`](./BMCU使用指南.md)。
+其中 `v1.0-baseline` 是基于原作者 V10.5 整理出的可编译、有中文文档的干净基线（修复编译问题、新增编译脚本与说明文档），作为后续开发的起点；`v2.0-aht20` 在其基础上新增 AHT20 温湿度传感器支持（见第 7 章），最新 `v2.1-aht20` 在此基础上新增温湿度探测模式（见第 6 章使用指南）。`v3.0-autoretract` 起引入双开关自动回抽（用 S2 自动判定料根，见第 6.3 节）；`v3.1-autoretract` 修复双开关自动回抽退料后不自动送料；**`v3.2-fix105` 为当前最新，仅修 bug、不改功能**——① 打印机发暂停/停止时 BMCU 若正在送料会立即停机（不再无视指令继续转），② 进料电机控制改为「黄灯三步法」避让（顶满先中力推 2s → 轻压 3s → 超 5s 才报真堵红灯），见第 6.2 节。回退到基线：`git checkout v1.0-baseline`。使用与固件选型见 [`BMCU使用指南.md`](./BMCU使用指南.md)。
 
 ---
 
@@ -227,6 +227,7 @@ AHUB 用 `CRC->DATAR` 硬件 CRC 外设做 32 位校验（`ahubus_package_add_cr
 
 每主循环按每个通道的 `motion` 驱动 PWM：
 - **on_use**：最小 PWM + 防堵转（anti‑stall，微秒级高 PWM 累积检测）；`g_on_use_jam_latch` 真堵塞→上报 `0xF06F`；`g_on_use_low_latch` 低压力锁定→红灯闪烁。
+  - **进料缓冲避让（v3.2-fix105 改进）**：料过五通/到挤出机入口把缓冲头顶满时，原版会一直死命硬推（空转啃料、易误报堵）。因 BMCU 与打印机无「料到哪儿」的通讯，无法靠电机转速区分「已过五通正常送料」与「真堵」，故改**时间配合法**（`pressure_ctrl_on_use`，见 `Motion_control.cpp`）：顶满累计计时 `g_on_use_full_ms[]`，① 0~2s 中力推一把（PWM cap ≈600）帮过五通；② 2~5s 减到轻压（cap ≈180）只保持不后退、等打印机拉走，此间缓冲头回落到正常带内即清零计时、恢复正常送料（绿灯）；③ ≥5s 仍顶满才算真堵，置 `g_on_use_jam_latch` 报红灯停机。**顶满但 <5s 亮黄灯**（保护避让、非故障），仅真堵亮红灯。
 - **pull_back / before_pull_back**：回抽，末端 **线性减速**（`PULL_RAMP_M=15mm` 区），速度从 `PULL_V_FAST=60mm/s` 降到 `PULL_V_END=12mm/s`。
 - **idle / send_out / redetect**：按 buffer 位置与有无 filament 决定动作；空闲 10s 后仅在末端动作。
 - **AUTOLOAD**（DM 双微动开关板）：触碰第一个开关触发装入，第二个开关（挤出机后）确认完全插入，再送约 120mm；防卡保护：buffer 卡住则回抽重试（最多 3 次）。
@@ -247,6 +248,8 @@ AHUB 用 `CRC->DATAR` 硬件 CRC 外设做 32 位校验（`ahubus_package_add_cr
 多重兜底：`AMS_RETRACT_LEN`（编译为 `2.00f`）作为安全上限，若退料超过该距离仍未检测到 S2 释放，自动停电机并进入 `filament_redetect`，绝不卡死。状态机顶部有保护：若因中断等离开回抽状态，立即解冻上报、复位自检相位，防止冻结卡死。
 
 > 单开关板只有 1 个开关，无法用 S2 判定料根，**自动回抽无效**，仍走固定长度逻辑（需按 PTFE 长度编译对应固件）。
+
+**暂停/停止即时响应（v3.2-fix105 改进）**：打印机发来暂停/停止时，若 BMCU 正在 `send_out` 送料（此时 `loaded=0xFF`，原版因 `allow_stop=(loaded==ch)` 而忽略指令、继续转），或正在 DM 自动装载送料，都会**立即退出送料并停机**。`send_out` 场景由 `bambu_bus_ams.cpp` 的 `is_stop_on_use` 放宽 `allow_stop` 限制处理；DM 自动装载送料场景由 `Motion_control_request_stop_dm_autoload()`（`Motion_control.cpp`）经 `g_dm_autoload_stop_req[]` latch 在 DM 状态机开头中止。
 
 ---
 

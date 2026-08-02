@@ -61,17 +61,22 @@ esac
 # --- 双开关自动回抽（AUTOLOAD=1 且 AUTO_RETRACT=1）：忽略回抽长度参数，用 2.00m 作为安全上限 ---
 # 实际回抽到位由第二个微动开关 S2 自动判定，固件文件名带 _auto 后缀，无需用户选择回抽长度。
 # AUTO_RETRACT=0（固定长度模式）：双开关也按固定长度矩阵编译，与 2.0 一致，文件名不带 _auto。
+# 单开关（AUTOLOAD=0）：固定长度逻辑，保留用户传入的 RETRACT，文件名不带 _auto。
 if [[ "${AUTOLOAD}" == "1" && "${AUTO_RETRACT}" == "0" ]]; then
   # 双开关固定长度模式：注入 =0 强制走固定长度分支（等价 2.0），必须提供回抽长度
   RETRACT="${RETRACT:-0.095}"
   AUTO_SUFFIX=""
   AUTO_RETRACT_FLAG="0"
   [[ -n "${RETRACT}" ]] || { echo "ERROR: AUTO_RETRACT=0 时双开关必须提供回抽长度(米)，如 0.30"; exit 1; }
-else
+elif [[ "${AUTOLOAD}" == "1" ]]; then
   # AUTO_RETRACT 缺省或=1：自动回抽（_auto）。宏不注入，由 Motion_control.h 派生为
   # BMCU_DM_TWO_MICROSWITCH（双开关=1），即默认自动回抽行为。
   RETRACT="2.00"
   AUTO_SUFFIX="_auto"
+  AUTO_RETRACT_FLAG=""
+else
+  # 单开关（AUTOLOAD=0）：固定长度逻辑，保留用户传入的回抽长度（SOLO 已在前面默认 0.095）
+  AUTO_SUFFIX=""
   AUTO_RETRACT_FLAG=""
 fi
 

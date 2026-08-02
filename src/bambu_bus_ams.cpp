@@ -7,6 +7,7 @@
 #include "_bus_hardware.h"
 #include "crc_bus.h"
 #include "sim_aht20.h"
+#include "motion_control.h"
 
 uint8_t bambubus_ams_map[4] = {0, 1, 2, 3};
 static void bambubus_build_static_serial(void);
@@ -269,12 +270,19 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
         {
             t_sendout_onuse = 0u;
 
-            if (!allow_stop) return true;
+            // v3.2: 请求中止该通道正在进行的 DM 自动装载送料(若正在送料则立即停机)
+            Motion_control_request_stop_dm_autoload(ch);
 
             const _filament_motion prev = ams_ptr->filament[ch].motion;
 
+            // v3.2: 打印机发来暂停/停止时，即使是正在自己送料(send_out)也必须立刻响应并停机。
+            // 原逻辑在 send_out 时 loaded==0xFF，allow_stop 为 false 会被忽略，导致料一直转不停。
+            if (!allow_stop && (prev != _filament_motion::send_out))
+                return true;
+
             if (prev == _filament_motion::on_use ||
-                prev == _filament_motion::before_on_use)
+                prev == _filament_motion::before_on_use ||
+                prev == _filament_motion::send_out)
             {
                 ams_ptr->filament[ch].motion = _filament_motion::stop_on_use;
             }
