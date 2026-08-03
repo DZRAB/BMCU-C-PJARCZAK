@@ -1,478 +1,3 @@
-# BMCU-C 固件开发说明
-
-> 面向开发者的架构、实现逻辑与通讯协议说明。无需逐行读源码即可理解整体设计。
-> 源码注释已翻译为中文（见各 `.cpp/.h`；本仓库背景与版本说明见 `README.md`）。
-
----
-
-## 1. 项目概述
-
-BMCU-C 是 **Bambu Lab AMS（自动多色换料系统）的开源替代固件**，运行在第三方 BMCU 370C 硬件上，使 4 通道 filament 切料/换料器能像原厂 AMS 一样被打印机识别与控制。
-
-- **目标硬件**：BMCU 370C（带霍尔传感器 + AS5600 磁编码器）
-- **MCU**：CH32V203C8T6（RISC‑V，144 MHz，WCH）
-- **SDK**：WCH 原生 SDK + `noneos`（无操作系统，纯裸机中断驱动）
-- **功能**：多色自动换料、filament 装入/回抽/卸载、空通道校准、堵塞与防卡保护、AUTOLOAD 自动装载、filament 元数据与已装入状态掉电持久化、RGB 状态指示
-
-固件通过 **UART（半双工 RS485）** 与打印机通讯，协议分两套：
-- **BambuBus**（`0x3D` 帧）：BMCU 直接挂在打印机 AMS 总线上时
-- **AHUB**（`0x33` 帧）：BMCU 通过 AMS HUB 串联时
-
----
-
-## 版本说明
-
-本仓库（BMCU-C）基于原作者 **jarczakpawel** 的 BMCU 固件（基线 **V10.5**）二次开发：
-
-- 固件向打印机上报的版本号保持 `10.50`（原作者 V10.5），以维持打印机兼容性识别。
-- 本仓库自身的迭代使用 git 标签管理（如 `v1.0-baseline`、`v2.0-aht20`、`v2.1-aht20`、`v3.0-autoretract`、`v3.1-autoretract`、`v3.2-fix105`、`v3.2.1-fix105`），后续版本递增。
-
-其中 `v1.0-baseline` 是基于原作者 V10.5 整理出的可编译、有中文文档的干净基线（修复编译问题、新增编译脚本与说明文档），作为后续开发的起点；`v2.0-aht20` 在其基础上新增 AHT20 温湿度传感器支持（见第 7 章），最新 `v2.1-aht20` 在此基础上新增温湿度探测模式（见第 6 章使用指南）。`v3.0-autoretract` 起引入双开关自动回抽（用 S2 自动判定料根，见第 6.3 节）；`v3.1-autoretract` 修复双开关自动回抽退料后不自动送料；`v3.2-fix105` 修复「暂停/停止不停机」与「进料电机黄灯三步法避让」（见第 6.2 节）；**`v3.2.1-fix105` 为当前最新，专修 AHT20 温湿度传感器驱动缺陷**（见第 12 章）——3.2 核心功能代码未改动，仅 `src/aht20/`、`src/main.cpp` 自检逻辑有更新。回退到基线：`git checkout v1.0-baseline`。使用与固件选型见 [`BMCU使用指南.md`](./BMCU使用指南.md)。
-
----
-
-## 2. 硬件平台
-
-| 资源 | 用途 |
-|---|---|
-| USART1 (PA9=TX, PA10=RX, PA12=DE) | 与打印机通讯的半双工 RS485 总线 |
-| TIMER / PWM | 4 路电机驱动（每通道一路） |
-| ADC + DMA | 采集 buffer 位置电压（空通道检测、DM 开关） |
-| 软 I2C（GPIO 模拟开漏） | 4 路 AS5600 磁编码器（测 buffer 轮角度→距离/速度） |
-| 软 I2C（独立通道 PB10/PB11，两线开漏） | AHT20 温湿度传感器（环境温湿度；不与 AS5600 共用总线） |
-| WS2812 RGB | 1 颗系统灯（SYS_RGB）+ 4 颗通道灯（RGBOUT[0..3]） |
-| 内部 Flash 末 4KB 扇区 | NVM 持久化（校准、filament 元数据、状态） |
-
-**电机与传感器布局**（见 `Motion_control.cpp` 引脚定义）：
-- AS5600 SCL：PB15/PB14/PB13/PB12
-- AS5600 SDA：PD0/PC15/PC14/PC13
-- 每通道：1 个送料电机 + 1 个 AS5600 + 1 个 buffer（缓冲轮，带磁体）
-
----
-
-## 3. 软件架构与代码模块
-
-```
-main.cpp              初始化 + 主循环（调度总线/运动/LED）
-├─ bambu_bus_ams.cpp  BambuBus 协议：帧解析、命令分发、回复构造
-├─ ahub_bus.cpp       AHUB 协议：heartbeat/query/set 从机处理
-├─ _bus_hardware.cpp  UART1 + DMA + RS485 方向控制(DE) + 中断收包状态机
-├─ crc_bus.c          CRC8 / CRC16 查表实现
-├─ Motion_control.cpp 运动控制状态机（换料执行核心）
-├─ many_soft_AS5600.cpp 软 I2C AS5600 磁编码器驱动（4 通道并行）
-├─ aht20.cpp            AHT20 温湿度传感器驱动（独立软件 I2C 通道 PB10/PB11）
-├─ ADC_DMA.cpp        ADC+DMA 采集 buffer 电压
-├─ MC_PULL_calibration.cpp  空通道/霍尔极性校准
-├─ Flash_saves.cpp    NVM 持久化（页式 + magic + CRC）
-├─ ams.cpp/.h         AMS/filament 数据结构与初始化
-├─ ws2812.cpp         RGB LED 驱动
-├─ Debug_log.cpp      调试串口日志
-└─ hal/               中断屏蔽(time_hw/irq_wch) + 时间基准
-```
-
-**数据中枢**：全局 `ams[4]`（`ams.h`）保存 4 个 AMS 单元（本机只用 `BAMBU_BUS_AMS_NUM` 那一个）各自的 4 通道 filament 状态。总线层写入 `ams[]`，运动层读取 `ams[]` 驱动电机，二者通过 `ams[].filament[].motion` 这一个字段解耦。
-
----
-
-## 4. 上电启动与主循环
-
-`src/main.cpp`：
-
-1. `SystemInit` → 时钟 144 MHz → 开中断 → 关看门狗
-2. `RGB_init`、DEBUG、AMS、Flash 初始化
-3. `ADC_DMA_init` + 等待首帧采样
-4. `MC_PULL_calibration_boot`：首次启动（空通道）做空检测校准
-5. `ams_datas_read`：从 Flash 恢复 filament 元数据
-6. 若 Flash 中记录“上次已装入某通道”，则恢复 `now_filament_num`/`motion=on_use` 等（断电续打）
-7. `Motion_control_init` / `bambubus_init` / `bus_init`
-8. **主循环 `while(1)`**：
-   ```c
-   ahubus_run();        // 处理 AHUB 帧
-   bambubus_run();      // 处理 BambuBus 帧
-   bus_port_to_host.send_package(); // 若有待发数据则 DMA 发出
-   Motion_control_run(error);       // 执行运动状态机
-   RGB_update();        // 刷新 LED
-   ```
-   `error` 来自总线：收到心跳→正常；总线超时/CRC 错→`error=-1`（红灯，运动层据此进入安全态）。
-
----
-
-## 5. 通讯协议（重点）
-
-### 5.1 物理层
-
-`src/_bus_hardware.cpp` 配置 USART1：
-- 波特率 **1.25 Mbps**
-- 数据位 **9**、停止位 1、**偶校验（Even）**
-- 半双工：PA12 = DE（驱动使能），高=发、低=收
-- **TX 走 DMA1_Channel4**；**RX 走 RXNE 中断**，每收到 1 字节调用 `bus_port_to_host.irq(data)` 喂给收包状态机
-
-### 5.2 收包状态机（`_bus_port_deal::irq`）
-
-按字节流状态机重组帧，靠首字节区分协议：
-- `0x3D` → BambuBus
-- `0x33` → AHUB
-
-关键判定（`idx==1` 看 `data & 0x80`）：
-- **短帧**：长度在 `buf[2]`，头 CRC8 在 `buf[3]`
-- **长帧**：长度在 `buf[4..5]`（16 位），头 CRC8 在 `buf[6]`
-
-帧头 CRC8 校验通过才继续收；收满 `length` 字节后，若主缓冲区空闲则“翻转双缓冲”把包交给主循环（`recv_data_len`、`bus_package_type` 置位）。**基于快照**解析，避免 RX/TX 竞争。
-
-### 5.3 BambuBus 协议（`0x3D`）
-
-#### 短帧（打印机→BMCU 控制命令，flag = `0xC5`）
-
-| 偏移 | 字段 |
-|---|---|
-| 0 | magic `0x3D` |
-| 1 | flag `0xC5` |
-| 2 | length |
-| 3 | CRC8（覆盖前 3 字节） |
-| 4 | **command** |
-| 5.. | 数据 |
-| n-2,n-1 | CRC16 |
-
-`command` 与处理函数（`bambu_bus_ams.cpp::get_packge_type`）：
-
-| command | 含义 | 处理 |
-|---|---|---|
-| `0x03` | filament_motion_short | `get_package_motion` → 回复运动短包 |
-| `0x04` | filament_motion_long | `get_package_stu_motion` → 回复运动长包（含温湿度） |
-| `0x05` | online_detect | `get_package_online_detect` → 在线检测/注册握手 |
-| `0x06` | REQx6 | （保留） |
-| `0x07` | NFC_detect | （保留） |
-| `0x08` | set_filament_info | `get_package_set_filament` → 接收 filament 元数据 |
-| `0x20` | heartbeat | 心跳（维持在线，触发 HMS 图标但**不阻断运行**） |
-
-#### 长帧（flag = `0x04`/`0x05`，目标地址=`host_device_type_ams`=0x0700）
-
-长帧头结构（`bambubus_long_packge_data`）：`package_number(2)+package_length(2)+crc8(1)+target(2)+source(2)+type(2)`，后接 `datas[]`，末尾 CRC16。
-`type` 字段与处理：
-
-| type | 含义 | 处理 |
-|---|---|---|
-| `0x21A` | MC_online | `get_package_long_packge_MC_online` |
-| `0x211` | read_filament_info | `get_package_long_packge_filament` → 回传 filament 元数据 |
-| `0x218` | set_filament_info_type2 | `get_package_set_filament_type2` → 接收元数据(长格式) |
-| `0x103` | version | `get_package_long_packge_version` → 回传版本/名称 `AMS08` |
-| `0x402` | serial_number | `get_package_long_packge_serial_number` → 回传 SN |
-
-#### BMCU 回复包（BMCU→打印机）
-
-- **运动短包**（`bambubus_ams_motion_package_struct`，`0x3D 0xC0 ...`）：含 `filament_use_flag`、`filament_channel`、剩余 `meters`(float)、`pressure`(uint16)、`filament_stu_flag` 等。
-- **运动长包**（`bambubus_ams_stu_motion_package_struct`）：额外含温湿度、在线标志。
-- **在线检测回复**：29 字节固定结构，携带版本/SN 前缀。
-- 序列号由 **MCU 硬件 UID** 经 FNV‑1a 哈希生成（`bambubus_build_static_serial`），保证每台设备唯一。
-
-### 5.4 AHUB 协议（`0x33`）
-
-用于 BMCU 挂在 AMS HUB 下时，HUB 作为主机轮询。
-
-帧布局（`ahubus_package_query_head` / `set_head`）：
-
-| 偏移 | 字段 |
-|---|---|
-| 0 | magic `0x33` |
-| 1 | flag（`0x80` 主机发出） |
-| 2 | length（单位：32 位字数 − 2） |
-| 3 | CRC8（覆盖前 3 字节） |
-| 4 | command：`0x01` heartbeat / `0x02` query / `0x03` set |
-| 5 | query/set type |
-| 6 | address（AMS 地址；xMCU 下高 4 位为索引） |
-| 7 | data_struct_count |
-| 8.. | 数据 |
-| 末尾 | **CRC32（硬件 CRC 外设）** |
-
-`command` 与处理（`ahub_bus.cpp::ahubus_run`）：
-
-| command | 含义 | 处理 |
-|---|---|---|
-| `0x01` heartbeat | HUB 心跳 | `ahubus_slave_get_package_heartbeat` → 回报在线 AMS 列表(EQPT) |
-| `0x02` query | 查询 | `ahubus_slave_get_package_query`：ams_name / filament_info / filament_stu / dryer_stu / all_filament_stu |
-| `0x03` set | 设置 | `ahubus_slave_get_package_set`：filament_info / dryer_stu / all_filament_stu（同步各 AMS 的 motion 状态） |
-
-AHUB 用 `CRC->DATAR` 硬件 CRC 外设做 32 位校验（`ahubus_package_add_crc`）。
-
-### 5.5 CRC 校验算法
-
-| 协议 | 算法 | 实现 |
-|---|---|---|
-| BambuBus 头 CRC8 | 查表法，初始 `0x66`（自定义表，非标准 CRC8） | `bus_crc8` |
-| BambuBus 帧 CRC16 | 查表法，初始 `0x913D`（自定义表） | `bus_crc16` |
-| AHUB CRC32 | CH32 硬件 CRC 外设（CRC‑32/MPEG‑2 风格） | `CRC->DATAR` |
-
-`package_add_crc` 同时填头 CRC8 与尾部 CRC16；接收端 `package_check_crc16` 校验。
-
----
-
-## 6. 换料命令与状态机
-
-### 6.1 命令映射（`set_motion`，`bambu_bus_ams.cpp`）
-
-打印机下发 `statu_flags` + `motion_flag` 组合，固件映射到 `ams[].filament[].motion`（`_filament_motion`）：
-
-| statu_flags | motion_flag | 目标 motion | 含义 |
-|---|---|---|---|
-| `0x03` | `0x00` | `send_out` | 送料出（装填中） |
-| `0x09` | `0x7F`/`0xA5` | `before_on_use` | 即将使用（预送料） |
-| `0x07` | `0x7F` | `on_use` | 使用中 |
-| `0x07` | `0x00` | `stop_on_use` | 停止使用 |
-| `0x09` | `0x3F` | `before_pull_back` | 准备回抽 |
-| 通道=`0xFF` | `0x03`/`0x00` | `pull_back` | 回抽/卸载 |
-
-同时维护 `now_filament_num`（当前通道）、`filament_use_flag`、`pressure`（上报给打印机的送料压力值）、`online` 标志。状态切换有互斥保护（`allow_any`/`allow_stop`），防止多通道冲突。
-
-### 6.2 运动执行（`Motion_control_run`，`Motion_control.cpp`）
-
-每主循环按每个通道的 `motion` 驱动 PWM：
-- **on_use**：最小 PWM + 防堵转（anti‑stall，微秒级高 PWM 累积检测）；`g_on_use_jam_latch` 真堵塞→上报 `0xF06F`；`g_on_use_low_latch` 低压力锁定→红灯闪烁。
-  - **进料缓冲避让（v3.2-fix105 改进）**：料过五通/到挤出机入口把缓冲头顶满时，原版会一直死命硬推（空转啃料、易误报堵）。因 BMCU 与打印机无「料到哪儿」的通讯，无法靠电机转速区分「已过五通正常送料」与「真堵」，故改**时间配合法**（`pressure_ctrl_on_use`，见 `Motion_control.cpp`）：顶满累计计时 `g_on_use_full_ms[]`，① 0~2s 中力推一把（PWM cap ≈600）帮过五通；② 2~5s 减到轻压（cap ≈180）只保持不后退、等打印机拉走，此间缓冲头回落到正常带内即清零计时、恢复正常送料（绿灯）；③ ≥5s 仍顶满才算真堵，置 `g_on_use_jam_latch` 报红灯停机。**顶满但 <5s 亮黄灯**（保护避让、非故障），仅真堵亮红灯。
-- **pull_back / before_pull_back**：回抽，末端 **线性减速**（`PULL_RAMP_M=15mm` 区），速度从 `PULL_V_FAST=60mm/s` 降到 `PULL_V_END=12mm/s`。
-- **idle / send_out / redetect**：按 buffer 位置与有无 filament 决定动作；空闲 10s 后仅在末端动作。
-- **AUTOLOAD**（DM 双微动开关板）：触碰第一个开关触发装入，第二个开关（挤出机后）确认完全插入，再送约 120mm；防卡保护：buffer 卡住则回抽重试（最多 3 次）。
-
-### 6.3 双开关自动回抽（`BMCU_DM_AUTO_RETRACT`，v3.0-autoretract 起）
-
-宏 `BMCU_DM_AUTO_RETRACT` 默认随 `BMCU_DM_TWO_MICROSWITCH` 派生（双开关=1 开、单开关=0 关）；即双开关板默认开启自动回抽、单开关板本就关闭。它仅由双开关派生得到，可用 `-DBMCU_DM_AUTO_RETRACT=0` 在编译期强制关闭。
-
-> **关闭 = 固定回抽长度模式**：`BMCU_DM_AUTO_RETRACT=0` 让双开关板放弃 S2 自动判定，走固定回抽长度逻辑——此时 `AMS_RETRACT_LEN`（编译进去的回抽长度）从“安全上限”变回“真实回抽目标长度”，且必须像 `NO_AUTOLOAD` 那样编译全长度矩阵。
-> 那它有什么实际用处？单开关板（`NO_AUTOLOAD`）本来就提供固定长度全矩阵，所以**绝大多数情况你不需要关它**；唯一不被冗余覆盖的场景是：**双开关硬件（不能刷 `NO_AUTOLOAD` 固件）却想要固定长度回抽**——例如该机器的 S2 传感不可靠、或你就是偏好某个固定长度。除此之外，它只是无害的代码级开关（用 `#ifndef` 定义、默认干净派生）；v3.0 已暴露该开关：`build_one.sh` 第 6 参数 `AUTO_RETRACT=0`、`build_all_firmwares_fast.py` 环境变量 `AUTO_RETRACT=0` 均可触发，触发后双开关也出 39 档固定长度矩阵（总固件数从默认 30 升到 942，全量合计 1884）。`build_all_firmwares_softload.sh` 则固定只出双开关自动回抽版（不读该开关）。
-
-原理：回抽（`pull_back`）时不再依赖编译期固定的 `AMS_RETRACT_LEN`，而是用第二个微动开关 S2 判定料根位置：
-
-1. 进入回抽即**冻结** `MC_ONLINE_key_stu` 对打印机的上报（避免 S2 跳变误触发打印机逻辑），自检改用**原始开关状态** `dm_key_raw`（不含手势覆盖）。
-2. 子状态 `AR_RETRACT_WAIT_S2`：持续退料，直到 `ks` 由“两开关都按（状态 1）”变为“仅 S1 按下（状态 2）”——即 S2 释放，表示料根已退到 S2 处，退料到此为止。
-3. 退料完成后由 `dm_ar_finish_pullback()` **主动放行** `dm_autoload_gate`：机构内 S1 永远被 BMG 压着，退料不会回到 `ks==0`，而 `dm_autoload_gate` 只在 `ks==0+idle` 时复位，不清的话 `dm_auto` 的 Stage1（S1_DEBOUNCE）会被永久挡住、导致退完不自动送料。放行后交回原版 `dm_auto` 自动装载流程：压上 S2 变 `ks==1`、自动再送约 12cm 就位。
-
-多重兜底：`AMS_RETRACT_LEN`（编译为 `2.00f`）作为安全上限，若退料超过该距离仍未检测到 S2 释放，自动停电机并进入 `filament_redetect`，绝不卡死。状态机顶部有保护：若因中断等离开回抽状态，立即解冻上报、复位自检相位，防止冻结卡死。
-
-> 单开关板只有 1 个开关，无法用 S2 判定料根，**自动回抽无效**，仍走固定长度逻辑（需按 PTFE 长度编译对应固件）。
-
-**暂停/停止即时响应（v3.2-fix105 改进）**：打印机发来暂停/停止时，若 BMCU 正在 `send_out` 送料（此时 `loaded=0xFF`，原版因 `allow_stop=(loaded==ch)` 而忽略指令、继续转），或正在 DM 自动装载送料，都会**立即退出送料并停机**。`send_out` 场景由 `bambu_bus_ams.cpp` 的 `is_stop_on_use` 放宽 `allow_stop` 限制处理；DM 自动装载送料场景由 `Motion_control_request_stop_dm_autoload()`（`Motion_control.cpp`）经 `g_dm_autoload_stop_req[]` latch 在 DM 状态机开头中止。
-
----
-
-## 7. 运动控制与传感器
-
-- **AS5600 磁编码器**（`many_soft_AS5600.cpp`）：软 I2C（开漏 50MHz，正确 ACK/NACK/START/STOP），4 通道并行轮询，限速约 1ms/次。输出角度→距离：`kAS5600_MM_PER_CNT = -(π*7.5)/4096`（7.5mm 轮半径）。`updata_stu` 判磁铁在线/强弱，`updata_angle` 算速度。
-- **AS5600 健康门控**：连续失败 `kAS5600_FAIL_TRIP=3` 次判离线并隔离该通道；恢复需 `kAS5600_OK_RECOVER=2` 次连续正常，防止失控。
-- **ADC_DMA**（`ADC_DMA.cpp`）：并行扫描 ADC1+ADC2，DMA 半满/全满后台滤波，约 5ms 更新一次；用于空通道检测电压、DM 微动开关电压。
-- **校准**（`MC_PULL_calibration.cpp`）：首次空通道启动记录每通道“无 filament”检测点（`MC_PULL_V_OFFSET/MIN/MAX`）、霍尔极性（`MC_PULL_POLARITY`）、DM 开关阈值（`MC_DM_KEY_NONE_THRESH`）；按住 buffer 约 5s 可重新校准。
-- **AHT20 温湿度传感器**（`aht20.cpp`）：独立软件 I2C 通道（PB10=SCL / PB11=SDA，两线均开漏 `GPIO_Mode_Out_OD`，符合标准 I2C 规范），**不与** 4 路 AS5600 共用总线。写时拉低=低、释放=靠外部上漏拉高，读 SDA 时也保持开漏、释放后靠外部 4.7k 上拉读 IDR（**绝不切输入模式**——CH32V203 上动态改 CNF/MODE 不可靠，曾是该传感器读不到的根因）。严格按官方手册流程：上电等 5ms（`init()` 内 `delay(200)` 稳压）→ 发写测量命令 `0x70 0xAC 0x33 0x00`（`start_measure`）→ 等 ≥80ms（`read_blocking` 内先 `delay(80)` 再轮询状态字 bit7=0 就绪）→ 发 `0x71` 读 7 字节（`get_measure`）：状态字 + SRH[19:0] + ST[19:0] + CRC，换算 `H=rawH/1048576*100%`、`T=rawT/1048576*200-50℃`。**上电自检**：`main.cpp` 在 `MC_PULL_calibration_boot()` 之前调用 `g_aht20.init()` + `read_blocking()`，成功则亮蓝灯→绿灯，失败不阻塞、直接进主程序。之后每 2 秒由主循环非阻塞采样（start_measure → 90ms 后 get_measure），结果写入 `ams[].filament[].compartment_temperature`（℃）/ `compartment_humidity`（%），由现有 ahub / bambu 协议自动上报打印机；未焊接 AHT20 时维持默认值 22℃/20%。
-
----
-
-## 8. Flash 持久化（`Flash_saves.cpp`）
-
-NVM 位于 Flash 末 **4KB 扇区**（`0x0800F000`，CH32V203C8 结束于 `0x08010000`）：
-
-| 区域 | 地址 | 内容 |
-|---|---|---|
-| CAL | `+0x100` (1×256B) | 校准：offset/vmin/vmax/polarity[4] |
-| MOT | `+0x200` (1×256B) | 运动状态 |
-| AMS | `+0x300`+ (4×256B) | 每通道 filament 元数据（颜色/温度/名称/ID） |
-
-- 每页 256B，页头 `NVM256_HDR{magic, ver, len, rsv}`，页尾 CRC（offset 252）。
-- 采用 **追加式日志 + skip‑if‑unchanged**，仅当页写满才擦除，显著减少擦除次数、掉电安全（部分写入记录被忽略）。
-- 幻数：`FIL1`/`CAL2`/`MOT1`/`STA1`。
-
----
-
-## 9. 构建变体与宏定义（`platformio.ini`）
-
-通过编译宏区分固件变体（见 `platformio.ini` 大量 `env:ams_a_*` 等）：
-
-| 宏 | 含义 |
-|---|---|
-| `BAMBU_BUS_AMS_NUM` (0..3) | 本机在 AMS 链中的编号（AMS_A..D）；决定回复的 AMS 地址与 SN 后缀 |
-| `AMS_RETRACT_LEN` (米) | filament 回抽长度（从 AMS 分线器末端起算）；SOLO 固定 0.095，AMS_A~D **支持 0.10~2.00 米（步长 5cm，共 39 档）**，可由编译参数/环境变量自定义 |
-| `BMCU_DM_TWO_MICROSWITCH` | DM 双微动开关板 + AUTOLOAD 辅助 |
-| `BMCU_DM_AUTO_RETRACT` | 自动回抽（默认随 `BMCU_DM_TWO_MICROSWITCH` 派生：双开关=1 开、单开关=0 关）；双开关用 S2 判定料根、无需固定回抽长度；`-D` 置 0 可强制关闭，双开关改用固定回抽长度（须编译全长度矩阵） |
-| `BMCU_P1S` | P1/P1S/X1 打印机适配（更长 PTFE 路径） |
-| `BMCU_SOFT_LOAD` | soft_load(A1)：更低装入力（弱弹簧单元） |
-| `BMCU_ONLINE_LED_FILAMENT_RGB` | 装入时 ONLINE LED 显示 filament RGB 颜色 |
-
-`env:fw` 通过环境变量注入上述宏；`env:moj` 为开发者默认（单 BMCU/SOLO，AMS 总线编号 0，回抽 0.095m）。
-
----
-
-## 10. 关键常量速查
-
-| 常量 | 值 | 含义 |
-|---|---|---|
-| `PULL_V_FAST` | 60 mm/s | 回抽起始速度 |
-| `PULL_V_END` | 12 mm/s | 末端速度 |
-| `PULL_RAMP_M` | 0.015 m | 末端线性减速区(15mm) |
-| `PULL_PWM_MIN` | 400 | 回抽最小 PWM（“顶推”） |
-| `kAS5600_MM_PER_CNT` | −(π·7.5)/4096 | 角度→距离换算 |
-| `kAS5600_FAIL_TRIP` / `OK_RECOVER` | 3 / 2 | 传感器离线判定/恢复 |
-| 总线波特率 | 1.25 Mbps, 9E1 | USART1 配置 |
-| `host_device_type_ams` | `0x0700` | BambuBus 目标地址 |
-
----
-
-## 11. 调试与排错提示
-
-- 系统灯：正常心跳时浅灰（`0x38,0x35,0x32`）；总线错误时红色（`0x10,0,0`）。
-- 打印机启动会报 **HMS 警告**（来自 `0x20` 心跳握手），属已知可接受行为，不阻断打印。
-- 首次刷写必须**所有通道为空**；否则取出 filament 后按住 buffer 约 5s 重新校准。
-
----
-
-## 12. v4.0-tpu 开发说明（TPU 软料送料）
-
-> 本章记录 `dev/v4.0-tpu` 分支针对 TPU 软料送料所做的开发细节。用户视角见
-> [`docs_release/v4.0-tpu发布说明.md`](./docs_release/v4.0-tpu发布说明.md)。
-
-### 12.1 背景与设计动机
-
-BMCU 的 on_use 送料闭环（见第 6 章）原本假设料是「刚性、低摩擦、可压缩性小」的（PLA/PETG 接近）。
-对 TPU 这类**高弹性、高摩擦、易堆料**的软料，原闭环会出问题：
-
-- 缓冲头压力判定失真（弹性料顶不进挤出机却显示「顶满」）→ 误报堵料红灯；
-- 推力过大啃料/堆料，过小送不动；
-- 固定长度回抽后 TPU 回弹，实际送料量不足。
-
-**核心决策：双轨固件**
-
-1. **通用固件（默认全量产出，推荐）**
-   - 编译时**不需要**指定 TPU 型号。
-   - 装料后打印机会把**当前通道材料型号**下发给 BMCU；BMCU 读到某通道是 TPU（如 `GFU90`）
-     后，**只对那个通道切换成对应 TPU 型号的软料推力参数**，其他通道（PLA/PETG…）仍走原 v3.2 刚性推力。
-   - 打印过程不改材料，直到更换/重设材料才更新该通道参数。
-   - 任何通道都不设 TPU 时，固件行为 = 原版 v3.2，**零差异**（参数表虽编入固件，但未被任何通道触发）。
-
-2. **专用固件（兜底，仅老打印机用）**
-   - 部分老打印机/AMS 无法下发或识别 TPU 耗材型号，BMCU 无从运行时识别。
-   - 编译时选定一个 TPU 型号（`BMCU_TPU_MODEL=GFU90`），单独生成专用固件刷入，
-     **所有通道强制按该型号参数送料**，不依赖打印机下发。
-   - 适用「整台只打 TPU、且打印机不支持材料设置」的妥协场景。
-
-最常用场景：**一个通道放 TPU、其他通道放 PLA 做支撑**（如 TPU 壳体 + PLA 支撑）。
-一块通用固件通吃，哪个槽放 TPU 哪个槽自动优化。
-
-### 12.2 分支与约束（实现前提）
-
-| 项 | 约束 |
-|---|---|
-| `main` | 保持与原作者镜像一致，不动 |
-| `dev/grid` | 二次开发主分支 |
-| `dev/v4.0-tpu` | 本次 TPU 开发分支 |
-| `version` 文件 | 保持 `10.50.00.00`，不动（版本靠 git 标签区分） |
-| `platformio.ini` | 原版脚本，绝对不动；所有变体通过构建脚本注入宏实现 |
-
-### 12.3 改动清单
-
-**新增 `src/tpu_params.h`（TPU 送料参数表）**
-- `_tpu_model` 枚举：按 Bambu filament_id 前缀/型号对应（GFU98/GFU00/GFU02/GFU95/GFU90/GFU85）。
-- `_tpu_param` 结构体：每个型号的完整送料参数。
-- `TPU_PARAMS[]`：参数表（按硬度分级，初值待实测校准）。
-- `tpu_param_lookup(const char *filament_id)`：**运行时**按 filament_id 前 4 字符查表；
-  找不到返回最软项（TPU_85A），保证「未知 TPU 也走最保守参数」。
-- `TPU_SELECTED_ID` / `tpu_param_selected()`：**仅**在 `BMCU_TPU_MODEL` 定义时存在，供专用固件编译期锁定型号。
-- 关键改动：参数表与 `tpu_param_lookup()` 从 `#ifdef BMCU_TPU_MODEL` 内**移出**，改为无条件编译进固件，
-  使通用固件在运行时也能查表（否则无法「按通道识别 TPU」）。
-
-**修改 `src/ams.h`**
-- 新增 `_filament_type` 枚举：`unknown / pla / petg / abs / pa / tpu / other`。
-- `_filament` 结构体新增 `filament_type` 字段（uint8_t，默认 `unknown`）。
-
-**修改 `src/bambu_bus_ams.cpp`**
-- 新增 `bambubus_filament_id_to_type()`：把 Bambu filament_id（如 `GFU90`）映射到 `_filament_type::tpu`。
-- 在两处材料下发回调（`set_filament`、`set_filament_type2`）写入 `filament[ch].filament_type`。
-  这正是「装料下发 → 识别材料 → 设置该通道推力」的触发点。
-
-**修改 `src/Motion_control.cpp`（on_use 闭环接入 TPU 参数）**
-- `run()` 的 on_use 段新增按通道决策：
-  - 专用固件（`BMCU_TPU_MODEL` 定义）：`tpu_p = tpu_param_selected()`，所有通道强制用编译期型号。
-  - 通用固件：`if (filament[CHx].filament_type == tpu) tpu_p = tpu_param_lookup(filament[CHx].bambubus_filament_id);`
-    否则 `tpu_p == nullptr`，走原 v3.2 常量。
-- 接入的全部参数字段：
-  - `on_use_target_pct` / `on_use_band_hi`：目标压力带（通用/专用共用同一覆盖点）。
-  - `feed_pwm_hi` / `feed_pwm_lo`：on_use 主路 PWM 推力上限，TPU 降级防过推/啃料。
-  - `phase1_ms` / `phase2_ms` / `jam_ms`：三段式堵料避让时间窗（见 12.4）。
-  - `phase1_lim` / `phase2_lim`：避让段力度上限，TPU 减小防啃料。
-  - `pull_comp_m`：固定长度回抽时 TPU 通道额外多退的补偿长度（解决回弹送料不足）。
-
-**修改 `build_one.sh`（单编脚本）**
-- 第 7 参数 `TPU_MODEL`：`TPU_MODEL=GFU90 bash build_one.sh ...` 编译专用固件。
-- 通过 `PLATFORMIO_BUILD_FLAGS="-DBMCU_TPU_MODEL=${TPU_MODEL}"` 注入（不改 `platformio.ini`）。
-- TPU 模式忽略 `MODE` 推力参数，固定标准推力基准（P1S=0, SOFT_LOAD=0），目录层用型号名顶替原模式层
-  （如 `single_build/TPU_GFU90/GFU90/...`，不再有 `standard(A1)/high_force_load(P1S)/soft_load(A1)` 三套）。
-- 选型指南复制逻辑加 `tpu_dir` 前缀，避免生成错位重复文件夹。
-
-**修改 `build_all_firmwares_fast.py`（全量快速编译）**
-- 顶部读取 `BMCU_TPU_MODEL` / `TPU_OUT_DIR` 环境变量。
-- `scan_macros` 额外扫描 `BMCU_TPU_MODEL`（仅用于源文件分类，不影响 flags 注入），
-  确保引用该宏的源（如 `bambu_bus_ams.cpp`）在 TPU 分支被正确重编。
-- TPU 分支：INVARIANT 源直接复用常规已编译的不变 `.o`（不重编），仅 OTHER/RETRACT 中引用 TPU 宏的源重编。
-- TPU 模式 `MODES` 只取标准推力一项（型号名顶替模式层），全量从 972 降到 **324** 个。
-- TPU 链接产物输出到独立的 `firmwares-tpu/{型号}/...`，不污染常规 `firmwares/` 矩阵。
-- TPU 模式跳过常规 `firmwares/` 写盘（避免混入型号目录）。
-
-**修改 `clean_build.sh` / `.gitignore`**
-- `clean_build.sh` 的 `DIRS` 增加 `firmwares-tpu` `firmwares_Release`。
-- `.gitignore` 忽略 `firmwares-tpu/`（固件产出与编译产物不入库，发布页自行发布）。
-
-### 12.4 三段式堵料避让逻辑（v4.0 新增）
-
-原闭环顶满期只有「中力推一把 → 轻压保持」两段。v4.0 改为**三段**，对软料更友好：
-
-| 阶段 | 时间窗 | 力度上限 | 目的 |
-|---|---|---|---|
-| 第 1 段 | `0 ~ phase1_ms` | `phase1_lim` | 中力推一把，协助顶过五通/送进挤出机 |
-| 第 2 段 | `phase1_ms ~ phase1_ms+phase2_ms` | `phase2_lim` | 轻压保持，等打印机把料拉走 |
-| 第 3 段 | `> phase1_ms+phase2_ms`（仍 `< jam_ms`） | `phase2_lim × 0.5` | 超长顶满时更保守，进一步防误报 |
-| 真堵 | 累计 `> jam_ms` | — | 报堵料红灯（与原逻辑一致） |
-
-所有时间窗/力度按型号在 `tpu_params.h` 中分级，越软的料窗口越长、力度越小。
-
-### 12.5 参数表（`src/tpu_params.h` 字段含义）
-
-| 字段 | 含义 | 趋势（越软越小/越长） |
-|---|---|---|
-| `on_use_target_pct` | 常态送料目标压力带中心 | 越低 |
-| `on_use_band_hi` | 目标压力带上限 | 越低 |
-| `phase1_ms` | 第 1 段中力推时长 | 越长 |
-| `phase2_ms` | 第 2 段轻压时长 | 越长 |
-| `jam_ms` | 真堵阈值（累计顶满） | 越长 |
-| `phase1_lim` | 第 1 段 PWM 上限 | 越小 |
-| `phase2_lim` | 第 2 段 PWM 上限 | 越小 |
-| `feed_pwm_hi` | on_use 主路 PWM 上限（推一把） | 越小 |
-| `feed_pwm_lo` | on_use 主路 PWM 下限（持续推力） | 越小 |
-| `pull_comp_m` | 固定回抽弹性补偿（米） | 越大 |
-
-当前表内 6 档型号（硬度硬→软）：GFU98(68D) > GFU00/GFU95(95A) > GFU90(90A) > GFU85(85A)。
-**表中数值为初值，标注 `[待实测]` 的需上机校准后再固化。**
-
-### 12.6 运行时数据流
-
-```
-打印机下发材料型号
-   └─> bambu_bus_ams.cpp: set_filament / set_filament_type2
-         └─> filament[ch].filament_type = tpu (经 bambubus_filament_id_to_type)
-               └─> Motion_control::run(CHx) on_use 段
-                     ├─ 通用固件: filament_type==tpu ?
-                     │     tpu_p = tpu_param_lookup(filament[ch].bambubus_filament_id)
-                     │     否则 tpu_p = nullptr (走 v3.2 常量)
-                     └─ 专用固件: tpu_p = tpu_param_selected() (编译期锁定)
-                     └─> 用 tpu_p->* 覆盖 on_use 目标带/PWM 上限/避让/回抽补偿
-```
-
-### 12.7 构建与验证
-
-- **通用固件（默认）**：`python build_all_firmwares_fast.py` → 常规 972 个到 `firmwares/`。
-- **专用固件**：`BMCU_TPU_MODEL=GFU90 python build_all_firmwares_fast.py` → 324 个到 `firmwares-tpu/GFU90/...`。
-- **单编调试**：`bash build_one.sh standard 1 1 SOLO 0.30 1`（通用） / `... 1 GFU90`（专用）。
-- 验证要点：通用固件二进制含完整参数表，无 TPU 通道时行为与 v3.2 一致；专用固件走编译期锁定路径。
-- 注：全量快速脚本此前存在 INVARIANT 源重复重编导致的性能问题，已优化（TPU 分支复用常规不变 `.o`），尚未跑全量耗时验证。
-
-- 二代打印机若不被识别，多为信号 A/B 接反，可尝试对调（需明确自己在做什么）。
-- 调试串口日志见 `Debug_log.cpp`（`DEBUG(...)` 宏）。
-
----
-
 ## 12. AHT20 驱动修复细节（v3.2.1-fix105）
 
 ### 12.1 问题背景
@@ -557,6 +82,116 @@ AHT20 在板子上离 SYS_RGB 灯珠很近，灯一直亮白光会发热，把 A
 - **无 AHT20**：白色常亮（没传感器可烤，保持原样）。
 - **通讯异常**（收到打印机 `error` 包）：红色常亮 `0x10,0,0`。
 - 闪烁周期（3 秒）和温湿度采样周期（在线 2 秒 / 离线 10 秒）互不干扰，灯靠 `time_ms64()` 自己计时，不阻塞。
+
+---
+
+> 文档基于源码静态分析整理，覆盖功能、实现逻辑与通讯协议主干。具体字节级帧样例可参考 `bambu_bus_ams.cpp` 中 `// 3D C5 ...` 形式的抓包注释。
+
+
+---
+
+## 13. 版本迭代开发记录（v3.0 → v3.2-fix105）
+
+> 本章集中记录 3.0/3.1/3.2 三个标签的**改动动机、根因分析、具体代码改动点**，供回溯。代码行号/符号以各标签对应提交为准；功能面描述见 README「版本说明」。当前最新标签为 `v3.2.1-fix105`（AHT20 驱动修复，见第 12 章）。
+> 本章集中记录 3.0/3.1/3.2 三个标签的**改动动机、根因分析、具体代码改动点**，供回溯。代码行号/符号以各标签对应提交为准；功能面描述见 README「版本说明」。
+
+### 13.1 v3.0-autoretract：双开关自动回抽（S2 判定料根）
+
+- **新增能力**：双微动开关板（S1=进料口、S2=挤出机后）在回抽时不再依赖编译期固定的 `AMS_RETRACT_LEN`，改用 **S2 释放** 自动判定料根位置，自动决定回抽距离。
+- **关键宏**：`BMCU_DM_AUTO_RETRACT`（默认随 `BMCU_DM_TWO_MICROSWITCH` 派生；双开关=1、单开关=0）。关闭则双开关也走固定回抽长度（需编译全长度矩阵），见第 6.3 节说明。
+- **代码位置**：`Motion_control.cpp` 中 `dm_autoretract_phase_enum`、`dm_ar_phase[]`、`dm_ar_finish_pullback` lambda；自检用 `dm_key_raw[]`（原始开关状态，不含手势覆盖）、`dm_ar_freeze_report[]`（冻结对打印机上报）。
+- **原理**：退料期间冻结 MC_ONLINE 上报避免 S2 跳变误触发打印机；以 `ks`（由 `dm_key_to_state()` 解码）判料根；`AMS_RETRACT_LEN(=2.00f)` 退化为安全上限兜底。
+
+### 13.2 v3.1-autoretract：修复双开关自动回抽退料后不自动送料
+
+#### 现象
+v3.0 双开关自动回抽退完料后，不会自动向前送料就位，需用户手动干预。
+
+#### 根因（读代码确认）
+BMCU 370C 机构中 **S1（进料口微动开关）永远被 BMG 滚轮压住**，`ks` 的物理真实取值只能是：
+- `1` = 两开关都按（both，S1+S2，≈1.8V）
+- `2` = 仅 S1 按下（≈1.5V，即 S2 已释放）
+- `3` = 仅 S2 内侧（≈1.0V，异常/进料中）
+- **永远到不了 `0`（none）**
+
+v3.0 的回抽状态机有两段：
+1. `AR_RETRACT_WAIT_S2`：退料，等到 `ks==0` 才算完全退出；
+2. `AR_RESEAT_WAIT_S1S2`：再正推 `AR_RESEAT_MAX_M≈5cm`，直到 S2 重新按下（`ks==1`）或超时 200 周期。
+
+由于 `ks` 到不了 `0`，第 1 段靠 `d >= safety_max` 兜底退出，第 2 段则靠 200 周期超时退出；退出后 `dm_autoload_gate` 仍保持置位（`dm_auto` 的 Stage1 `S1_DEBOUNCE` 仅在 `ks==0 + idle` 时复位），导致 `dm_auto` 自动装载流程被永久挡住 → **退完不自动送料**。
+
+#### 改动清单（`Motion_control.cpp` + `bambu_bus_ams.cpp`）
+- 删除 `AR_RESEAT_WAIT_S1S2` 阶段及相关变量 `AR_RESEAT_MAX_M`、`dm_ar_reseat_start_m[]`、`dm_ar_reseat_cycles[]`；枚举仅保留 `AR_IDLE`、`AR_RETRACT_WAIT_S2`。
+- 退料判定改为 **SW2 释放即停**：`const bool sw2_released = (ks == 2u);` 命中即 `dm_ar_finish_pullback()`；删除等待 `ks==0` 分支。
+- `dm_key_to_state()` 阈值重标定（与实际机构电压对应）：
+  - `v < none_thr` → `0`（none）
+  - `v > 1.65` → `1`（both）
+  - `v > 1.25` → `2`（仅 S1，即 SW2 释放）★ 退料判定点
+  - 其余 → `3`（仅 S2 内侧，异常）
+- `dm_ar_finish_pullback()` 末尾新增：`dm_autoload_gate[i] = 0u;`（主动放行，否则 `dm_auto` Stage1 被永久挡）→ 交回 `dm_auto` 自动装载流程（压上 S2 变 `ks==1`，再送约 12cm 就位）。
+- `motor_motion_switch()` 退料分支新增：`dm_loaded[num] = 0u;`（退料后清空装载标志，交 `dm_auto` 重新送料定位）。
+- 注释同步更新（原注释写的"退到 S2 释放再正推至 S2 再按下定位"与机构事实不符，已改为"退到 SW2 释放即停，然后交 dm_auto 送 12cm"）。
+- `bambu_bus_ams.cpp` 附属改动：`long_packge_version_version_and_name_AMS08[]` 的型号名字段由 `AMS08`（0x41,0x4D,0x53,0x30,0x38）改为 `N3F05`（0x4E,0x33,0x46,0x30,0x35）——为让 Bambu Studio 显示温湿度数值（此改动在 v3.2 被回退，见 13.3「上报版本名回退」）。
+
+#### 验证点
+- 双开关板退料后无需手动干预即自动送料就位；
+- 单开关板（`BMCU_DM_AUTO_RETRACT=0`）走固定长度，不受影响；
+- `AMS_RETRACT_LEN` 仍作为安全上限兜底防卡死。
+
+### 13.3 v3.2-fix105：仅修 bug（不丢 3.1 功能）
+
+> 分支 `bugfix/v3.2-fix105`，基于 `v3.1-autoretract`。**仅修两个遗留 bug，功能/上报号 `10.50` 完全不变**。具体功能面说明见 README。
+
+#### Bug1：手动暂停 / 停止时 BMCU 不停
+
+**现象**：打印机发来暂停或停止指令时，若 BMCU 正处于"自己送料"状态（自动回抽后的 `send_out` 送料，或 DM 自动装载 `dm_auto` 送料），会无视停止指令继续转动，直到自己送完才停。
+
+**根因（读代码确认）**：
+- `bambu_bus_ams.cpp` 的 `set_motion()` 中 `is_stop_on_use` 分支原逻辑：
+  ```cpp
+  if (!allow_stop) return true;   // 直接忽略暂停
+  ```
+  其中 `allow_stop = (ams_ptr->filament[ch].loaded == ch)`。`send_out`（自动回抽后正在送料）时 `loaded == 0xFF`，`allow_stop` 为 `false`，于是暂停指令被 `return true` 直接吞掉，BMCU 继续转。
+- DM 自动装载（`dm_auto` 状态机）的 `forward` 分支根本不在 `set_motion()` 的 `motion` 切换覆盖范围内，`stop_on_use` 覆盖不到它，故也在继续转。
+
+**改动清单**：
+- `src/bambu_bus_ams.cpp`
+  - 顶部新增 `#include "motion_control.h"`。
+  - `is_stop_on_use` 分支：在 `if (!allow_stop) return true;` 之前先调用 `Motion_control_request_stop_dm_autoload(ch);`（请求中止正在进行的 DM 自动装载送料）。
+  - 放宽 `allow_stop` 限制：`if (!allow_stop && (prev != _filament_motion::send_out)) return true;` —— 仅当**不是 `send_out`** 且 `!allow_stop` 时才忽略；`send_out` 状态也被纳入可停止集合（`prev == send_out` → 置 `stop_on_use`）。
+- `src/Motion_control.h`：新增声明 `void Motion_control_request_stop_dm_autoload(uint8_t ch);`
+- `src/Motion_control.cpp`：
+  - 新增静态 latch `g_dm_autoload_stop_req[4]` 与 setter `Motion_control_request_stop_dm_autoload()`。
+  - 在 `dm_auto` 状态机 `forward` 分支开头插入：若 `g_dm_autoload_stop_req[CHx]` 置位，则清 PID、复位 `dm_auto_state=DM_AUTO_IDLE`、`dm_autoload_active=false`、`dm_autoload_gate=0`、电机 PWM=0，并 `return` 直接停机（原误用的 `goto run_end` 标签不存在，已改为 `return`）。
+
+**效果**：打印机一发暂停/停止（或通道掉线），BMCU 若在 `send_out` 或 `dm_auto` 送料，立即退出并停机；正常 `on_use`/`before_on_use` 的停止逻辑保持不变。
+
+#### Bug2：进料电机缓冲顶满误报堵料 → 黄灯三步法
+
+**现象**：料过五通（4 管汇 1）或到挤出机入口时，缓冲头被顶到"满"位。原版此时一直用大力死命硬推（PWM cap 最高 950），要么空转啃料、要么误报"堵料"红灯停机；真堵了又可能判断不及时。
+
+**根因**：BMCU 与打印机之间**没有"料到哪儿了"的通讯**，无法靠电机转速/位置区分"已过五通正常送料"与"真卡死"。原版用 `retrig=55.0` 的 `pct` 二次放大推力（最高 950）去"硬闯"，在过五通的正常阻力下极易误触发堵料红灯。
+
+**改动清单**（`src/Motion_control.cpp`，`pressure_ctrl_on_use` 顶满分支）：
+- 新增静态计时器 `g_on_use_full_ms[4]`（缓冲顶满持续毫秒）。
+- 正常带内（回落）分支新增 `g_on_use_full_ms[CHx] = 0u;` —— 缓冲头回落即清零计时、恢复绿灯正常送料。
+- 顶满（`pct` 高于目标带）分支改为**时间配合三步法**：
+  1. 累计 `g_on_use_full_ms[CHx] += time_E*1000`；
+  2. `t_full >= 5000`：**判定真堵** → 置 `g_on_use_jam_latch[CHx]=1`、上报 `0xF06F`、红灯、`Motion_control_set_PWM(CHx,0)`、`return` 停机（与原堵料红灯逻辑一致）；
+  3. `<5s`：**亮黄灯**（0xFF,0xFF,0x00，保护避让、非故障）；按时间分两段推力：
+     - `t_full < 2000`：`lim_f = 600`（中力推一把，协助顶过五通/送进挤出机）；
+     - `t_full >= 2000`：`lim_f = 180`（轻压保持，只防后退，等打印机把料拉走）；
+  4. 删除原 `retrig` 二次放大段（原 `mul` 最高 3×、cap 950 的逻辑）。
+- 原理：绝大多数"过五通/正常送料"的顶满会在 2~5s 内随打印机拉料而回落 → 自动恢复绿灯；只有**超过 5s 仍顶满**才确认真堵报红灯，误报率大幅下降。
+
+**效果对照**：送料遇五通阻力、缓冲头顶满时亮**黄灯**（保护避让）；仅真堵亮**红灯**。LED 语义见 `docs/rgb_led_meaning.md`。
+
+#### 上报版本名回退（AMS08）
+v3.2 将 `bambu_bus_ams.cpp` 中 `long_packge_version_version_and_name_AMS08[]` 的型号名字段由 v3.1 的 `N3F05`（0x4E,0x33,0x46,0x30,0x35）**改回 `AMS08`**（0x41,0x4D,0x53,0x30,0x38）。原因：`N3F05` 虽能让 Studio 显示温湿度数值，但实测运行两次即被打印机拉黑；`AMS08` 不显示具体数值但稳定不被拉黑。上报号仍保持 `10.50`。如需 `N3F05` 显示数值方案，需另行解决被拉黑问题（不在本版本范围）。
+
+#### 编译/验证
+- 三种型号实编通过：双开关 DM=1（Flash ≈84.9%）、单开关 DM=0（≈80.2%）、双开关固定长度。
+- `build_one.sh` 在 v3.2 修复了单开关 `AUTOLOAD=0` 时 `RETRACT` 被误覆盖为 `2.00_auto` 的脚本 bug（现单开关保留用户指定回抽长度）。
 
 ---
 
