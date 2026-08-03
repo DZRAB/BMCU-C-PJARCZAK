@@ -37,6 +37,11 @@ GLOBAL_START = time.perf_counter()
 # ===== 配置 =====
 FAST_MODE = True          # True: 用二进制修补回抽长度（最快）；False: 每回抽长度重编 Motion_control
 OUT_DIR = "firmwares"
+
+# v4.0-tpu: TPU 专用固件独立输出目录（与常规 firmwares/ 完全隔离，不污染常规矩阵）。
+# 仅当设置了环境变量 BMCU_TPU_MODEL（如 GFU98）时才构建 TPU 固件。
+TPU_MODEL = os.environ.get("BMCU_TPU_MODEL", "").strip()
+TPU_OUT_DIR = "firmwares-tpu"
 PIO_ENV = "fw"
 PARALLEL_DIR = ".pio_parallel"
 CACHE_DIR = os.path.join(PARALLEL_DIR, "obj_cache")
@@ -67,6 +72,10 @@ VARIANT_MACROS = [
     "DBMCU_P1S", "BMCU_SOFT_LOAD",
 ]
 RETRACT_MACRO = "AMS_RETRACT_LEN"
+# v4.0-tpu: 仅用于源文件分类扫描的额外宏（不影响 filter_variant_defines / flags 注入，
+# TPU 宏由 tpu_defs 单独注入）。必须把 BMCU_TPU_MODEL 纳入分类，否则引用它的源
+#（如 bambu_bus_ams.cpp）会被误判为 INVARIANT/OTHER 而不重编，TPU 固件行为错误。
+SCAN_ONLY_MACROS = ["BMCU_TPU_MODEL"]
 PLACEHOLDER_FLOAT = 123.456          # 占位符，编译基础固件用
 PLACEHOLDER_BYTES = struct.pack("<f", PLACEHOLDER_FLOAT)
 
@@ -80,6 +89,12 @@ MODES = [
     (MODE_P1S_DIR, 1, 0),
     (MODE_SOFT_DIR, 0, 1),
 ]
+
+# v4.0-tpu：TPU 专用固件不区分 standard/p1s/soft_load 三种推力模式（TPU 软料参数已在
+# tpu_params.h 按型号硬度定制，无需再叠加推力模式）。TPU 一律以标准推力为基准
+# （P1S=0, SOFT_LOAD=0），且目录层用型号名（如 GFU90）顶替原模式层。
+if TPU_MODEL:
+    MODES = [(TPU_MODEL, 0, 0)]
 
 
 def log(msg):
@@ -413,6 +428,10 @@ def scan_macros(src_file, seen=None):
     for mac in VARIANT_MACROS:
         if re.search(r"(?<![\w])" + re.escape(mac) + r"(?![\w])", text):
             found.add(mac)
+    # v4.0-tpu: 额外扫描"仅分类"宏（如 BMCU_TPU_MODEL），让引用它的源在 TPU 分支被重编
+    for mac in SCAN_ONLY_MACROS:
+        if re.search(r"(?<![\w])" + re.escape(mac) + r"(?![\w])", text):
+            found.add(mac)
     # 递归本地 include
     for m in re.finditer(r'#\s*include\s*"([^"]+)"', text):
         inc = m.group(1)
@@ -603,6 +622,29 @@ for combo in sorted(mode_combos):
             compile_tasks.append((compiler, flags + defs_ph, src, obj, f"ret:{vkey}/{os.path.basename(obj_path)}"))
             retract_user_map[(obj_path, vkey)] = obj
 
+        # v4.0-tpu: 若设置了 BMCU_TPU_MODEL，额外为该 combo 生成"TPU 宏变体"的 .o。
+        # 用独立的 tpu_vkey 命名空间（含型号），与常规 vkey 完全隔离；常规全量
+        # 构建的数据结构（不含 TPU 宏的 vkey）不受影响，零差异。
+        if TPU_MODEL:
+            tpu_vkey = f"tpu{TPU_MODEL}_{vkey}"
+            tvdir = os.path.join(CACHE_DIR, "variant_tpu", TPU_MODEL, vkey)
+            os.makedirs(tvdir, exist_ok=True)
+            tpu_defs = defs + [f"-DBMCU_TPU_MODEL={TPU_MODEL}"]
+            tpu_defs_ph = defs_ph + [f"-DBMCU_TPU_MODEL={TPU_MODEL}"]
+            # v4.0-tpu 优化：INVARIANT 源（真正不引用 BMCU_TPU_MODEL 的）直接复用常规已编译的
+            # 不变 .o，不重编（链接时 build_link_objs 用 tpu_vkey 调用会自动回退到 invariant_user_map）。
+            # 仅 OTHER / RETRACT 中引用了 TPU 宏的源才重编成 TPU 变体 .o。
+            if grp == "INVARIANT":
+                continue
+            elif grp == "OTHER":
+                tobj = os.path.join(tvdir, "other_" + os.path.basename(obj_path))
+                compile_tasks.append((compiler, flags + tpu_defs, src, tobj, f"tpu_oth:{tpu_vkey}/{os.path.basename(obj_path)}"))
+                other_user_map[(obj_path, tpu_vkey)] = tobj
+            elif grp == "RETRACT":
+                tobj = os.path.join(tvdir, "ret_" + os.path.basename(obj_path))
+                compile_tasks.append((compiler, flags + tpu_defs_ph, src, tobj, f"tpu_ret:{tpu_vkey}/{os.path.basename(obj_path)}"))
+                retract_user_map[(obj_path, tpu_vkey)] = tobj
+
 log(f"  共 {len(compile_tasks)} 个编译任务")
 
 compile_jobs = os.cpu_count() or 4
@@ -656,8 +698,9 @@ log("=" * 60)
 log("  第五步：链接基础固件 + 修补回抽长度")
 log("=" * 60)
 
-# 构建每个 vkey 的链接 .o 列表（显式框架 .o 按原顺序入链，用户源按分类入链）
-def build_link_objs(vkey):
+# 构建每个 vkey 的链接 .o 列表（显式框架 .o 按原顺序入链，用户源按分类入链）。
+# elf_path 为可选参数：传入时链接到该路径；省略时回落到常规基础链接的 tmp_dir 行为。
+def build_link_objs(vkey, elf_path=None):
     objs = []
     for obj_path in link_obj_order:
         src, _, _ = compile_map[obj_path]
@@ -674,7 +717,30 @@ def build_link_objs(vkey):
                 sys.exit(1)
         else:
             objs.append(framework_objs[obj_path])  # 显式框架 .o
-    return objs
+    if elf_path is None:
+        tmp_dir = os.path.join(CACHE_DIR, "tmp_base", vkey)
+        os.makedirs(tmp_dir, exist_ok=True)
+        elf_path = os.path.join(tmp_dir, "firmware.elf")
+    else:
+        os.makedirs(os.path.dirname(os.path.abspath(elf_path)), exist_ok=True)
+    link_cmd = [CXX, "-o", os.path.abspath(elf_path), "-T", LINK_LD] + LINK_FLAGS \
+        + [os.path.abspath(o) for o in objs]
+    for tok in LINK_SUFFIX:
+        if tok.endswith(".a"):
+            # 直接使用 pio 生成的原始预编译框架库（含 libc 等），不自行替换
+            link_cmd.append(ORIG_FW_A)
+        else:
+            link_cmd.append(tok)
+    link_env = os.environ.copy()
+    link_env["TMP"] = os.path.abspath(os.path.dirname(elf_path))
+    link_env["TEMP"] = os.path.abspath(os.path.dirname(elf_path))
+    link_env["TMPDIR"] = os.path.abspath(os.path.dirname(elf_path))
+    with link_sem:
+        r = subprocess.run(link_cmd, capture_output=True, startupinfo=STARTUPINFO, env=link_env)
+    if r.returncode != 0:
+        log(f"\n  LINK FAILED {vkey}:\n{r.stderr.decode(errors='replace')[:1500]}")
+        raise subprocess.CalledProcessError(r.returncode, link_cmd)
+    return elf_path
 
 
 total_jobs = os.cpu_count() or 4
@@ -695,29 +761,8 @@ def run_base_link(combo):
     global done_count
     dm, rgb, p1s, soft_load, ams_num = combo
     vkey = vkey_of(dm, rgb, p1s, soft_load, ams_num)
-    link_objs = build_link_objs(vkey)
-    tmp_dir = os.path.join(CACHE_DIR, "tmp_base", vkey)
-    os.makedirs(tmp_dir, exist_ok=True)
-    elf_path = os.path.join(tmp_dir, "firmware.elf")
-    link_cmd = [CXX, "-o", os.path.abspath(elf_path), "-T", LINK_LD] + LINK_FLAGS \
-        + [os.path.abspath(o) for o in link_objs]
-    for tok in LINK_SUFFIX:
-        if tok.endswith(".a"):
-            # 直接使用 pio 生成的原始预编译框架库（含 libc 等），不自行替换
-            link_cmd.append(ORIG_FW_A)
-        else:
-            link_cmd.append(tok)
-    final = link_cmd
-    link_env = os.environ.copy()
-    link_env["TMP"] = os.path.abspath(tmp_dir)
-    link_env["TEMP"] = os.path.abspath(tmp_dir)
-    link_env["TMPDIR"] = os.path.abspath(tmp_dir)
-    with link_sem:
-        r = subprocess.run(final, capture_output=True, startupinfo=STARTUPINFO, env=link_env)
-    if r.returncode != 0:
-        log(f"\n  BASE LINK FAILED {vkey}:\n{r.stderr.decode(errors='replace')[:1500]}")
-        raise subprocess.CalledProcessError(r.returncode, final)
-    bin_path = os.path.join(tmp_dir, "firmware.bin")
+    elf_path = build_link_objs(vkey)
+    bin_path = os.path.join(os.path.dirname(elf_path), "firmware.bin")
     with link_sem:
         subprocess.run([OBJCOPY, "-O", "binary", elf_path, bin_path],
                        capture_output=True, startupinfo=STARTUPINFO, check=True)
@@ -729,6 +774,28 @@ def run_base_link(combo):
     sys.stdout.write(f"\r  [基础链接] {cur}/{len(mode_combos)} | {cur*100//len(mode_combos)}% | 用时 {time.perf_counter()-t_link:.1f}s")
     sys.stdout.flush()
     return vkey, data
+
+
+def run_tpu_base_link(combo):
+    """v4.0-tpu: 为 TPU 宏变体做基础链接（复用 build_link_objs，传入含型号的 tpu_vkey）。"""
+    dm, rgb, p1s, soft_load, ams_num = combo
+    vkey = vkey_of(dm, rgb, p1s, soft_load, ams_num)
+    tpu_vkey = f"tpu{TPU_MODEL}_{vkey}"
+    t = time.perf_counter()
+    elf_path = os.path.join(CACHE_DIR, "tpu_base", f"tpu_base_{tpu_vkey}.elf")
+    build_link_objs(tpu_vkey, elf_path)
+    bin_path = os.path.join(os.path.dirname(elf_path), "tpu_base.bin")
+    with link_sem:
+        subprocess.run([OBJCOPY, "-O", "binary", elf_path, bin_path],
+                       capture_output=True, startupinfo=STARTUPINFO, check=True)
+    with open(bin_path, "rb") as f:
+        data = f.read()
+    with prog_lock:
+        tpu_base_done_local[0] += 1
+        cur = tpu_base_done_local[0]
+    sys.stdout.write(f"\r  [TPU基础链接] {cur}/{len(mode_combos)} | {cur*100//len(mode_combos)}% | 用时 {time.perf_counter()-t:.1f}s")
+    sys.stdout.flush()
+    return tpu_vkey, data
 
 
 base_bins = {}
@@ -752,6 +819,33 @@ print("")
 if link_errors:
     log(f"ERROR: 基础链接失败 {len(link_errors)} 个")
     sys.exit(1)
+
+
+# v4.0-tpu: TPU 专有基础链接（仅当设置了 BMCU_TPU_MODEL 时执行，与常规流程隔离）
+tpu_base_bins = {}
+if TPU_MODEL:
+    tpu_base_done_local = [0]
+    def _tpu_base_worker(combo):
+        try:
+            return run_tpu_base_link(combo)
+        except Exception as e:  # noqa
+            link_errors.append(str(e))
+            return None
+    log(f"开始 TPU 基础链接 (型号={TPU_MODEL}) ...")
+    with ThreadPoolExecutor(max_workers=total_jobs) as ex:
+        for res in ex.map(_tpu_base_worker, sorted(mode_combos)):
+            if res:
+                tpu_base_bins[res[0]] = res[1]
+    print("")
+    if link_errors:
+        log(f"ERROR: TPU 基础链接失败 {len(link_errors)} 个")
+        sys.exit(1)
+    tpu_sentinel_counts = {vk: data.count(PLACEHOLDER_BYTES) for vk, data in tpu_base_bins.items()}
+    for vk, c in tpu_sentinel_counts.items():
+        if c == 0:
+            log(f"ERROR: TPU 基础固件 {vk} 中未找到占位符浮点，无法用二进制修补（请设 FAST_MODE=False）")
+            sys.exit(1)
+    log(f"  TPU 占位符浮点出现次数（每模式组合）: {tpu_sentinel_counts}")
 
 # 校验占位符出现次数（必须 > 0，否则无法用修补法）
 base_sentinel_counts = {vk: data.count(PLACEHOLDER_BYTES) for vk, data in base_bins.items()}
@@ -796,11 +890,57 @@ def patch_and_write(task_item):
     sys.stdout.flush()
 
 
-with ThreadPoolExecutor(max_workers=total_jobs) as ex:
-    list(ex.map(patch_and_write, tasks))
-print("")
+# v4.0-tpu：TPU 模式下跳过常规 firmwares/ 写盘（避免在其中混入型号层 GFU90 等），
+# 仅写独立的 firmwares-tpu/ 目录。
+if TPU_MODEL:
+    log("  TPU 模式：跳过常规 firmwares/ 写盘，仅输出 firmwares-tpu/")
+else:
+    with ThreadPoolExecutor(max_workers=total_jobs) as ex:
+        list(ex.map(patch_and_write, tasks))
+    print("")
 t_link = time.perf_counter() - t_link
 log(f"  链接/修补完成，耗时 {t_link:.1f}s")
+
+# v4.0-tpu: TPU 专有写盘（独立目录 firmwares-tpu/，与常规 firmwares/ 隔离）
+if TPU_MODEL:
+    def patch_and_write_tpu(task_item):
+        global done_count
+        out_path, ams_num, retract_len, dm, rgb, p1s, soft_load = task_item
+        vkey = vkey_of(dm, rgb, p1s, soft_load, ams_num)
+        tpu_vkey = f"tpu{TPU_MODEL}_{vkey}"
+        base = bytearray(tpu_base_bins[tpu_vkey])
+        target = struct.pack("<f", float(retract_len.rstrip("f")))
+        expected = tpu_sentinel_counts[tpu_vkey]
+        pos = 0
+        replaced = 0
+        while True:
+            pos = base.find(PLACEHOLDER_BYTES, pos)
+            if pos == -1:
+                break
+            base[pos:pos + 4] = target
+            replaced += 1
+            pos += 4
+        if replaced != expected:
+            with prog_lock:
+                failed_builds.append(out_path)
+                done_count += 1
+            return
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "wb") as f:
+            f.write(base)
+        with prog_lock:
+            done_count += 1
+
+    tpu_tasks = []
+    for (out_path, ams_num, retract_len, dm, rgb, p1s, soft_load) in tasks:
+        tpu_out = out_path.replace(OUT_DIR, TPU_OUT_DIR, 1)
+        tpu_tasks.append((tpu_out, ams_num, retract_len, dm, rgb, p1s, soft_load))
+    log(f"开始 TPU 修补写盘 (型号={TPU_MODEL})，共 {len(tpu_tasks)} 个 ...")
+    done_count = 0
+    with ThreadPoolExecutor(max_workers=total_jobs) as ex:
+        list(ex.map(patch_and_write_tpu, tpu_tasks))
+    print("")
+    log(f"  TPU 写盘完成，共 {len(tpu_tasks)} 个 -> {TPU_OUT_DIR}/")
 
 if failed_builds:
     log(f"WARNING: {len(failed_builds)} 个固件生成失败：")

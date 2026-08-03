@@ -1,5 +1,6 @@
 #include "Motion_control.h"
 #include "ams.h"
+#include "tpu_params.h"   // v4.0-tpu: TPU 送料参数表(始终可用；运行时按通道识别 TPU 查表)
 #include "ADC_DMA.h"
 #include "Flash_saves.h"
 #include "_bus_hardware.h"
@@ -1535,8 +1536,22 @@ public:
             {
                 const float pct = MC_PULL_pct_f[CHx];
 
-                constexpr float target_pct = MC_ON_USE_TARGET_PCT;
-                constexpr float band_hi    = MC_ON_USE_BAND_HI_PCT;
+                // v4.0-tpu: 决定当前通道 CHx 使用的 TPU 参数指针。
+                //  - 专用固件（定义了 BMCU_TPU_MODEL）：所有通道强制用编译期型号参数。
+                //  - 通用固件（默认）：仅当该通道运行时识别为 TPU 才查表；
+                //    其他通道（PLA/PETG/...）tpu_p 为 nullptr，走原刚性常量，
+                //    行为与 v3.2 完全一致（零差异）。
+                const _tpu_param *tpu_p = nullptr;
+#ifdef BMCU_TPU_MODEL
+                tpu_p = tpu_param_selected();
+#else
+                if (ams[motion_control_ams_num].filament[CHx].filament_type == _filament_type::tpu)
+                    tpu_p = tpu_param_lookup(ams[motion_control_ams_num].filament[CHx].bambubus_filament_id);
+#endif
+
+                // 送料目标带：默认取通用(刚性料)常量；TPU 通道用对应型号参数。
+                float target_pct = tpu_p ? tpu_p->on_use_target_pct : MC_ON_USE_TARGET_PCT;
+                float band_hi    = tpu_p ? tpu_p->on_use_band_hi    : MC_ON_USE_BAND_HI_PCT;
 
                 float band_hi_eff = band_hi;
 
@@ -1568,12 +1583,14 @@ public:
                     }
                 }
 
-                constexpr float pwm_lo          = 380.0f;
+                // v4.0-tpu: 常态 on_use 推力上限按 TPU 型号降级（软料防过推/啃料）。
+                // 非 TPU 通道用原 v3.2 常量。
+                const float pwm_lo = tpu_p ? tpu_p->feed_pwm_lo : 380.0f;
                 constexpr float pct_fast_onuse  = 50.0f;
-                constexpr float pwm_fast_onuse  = 900.0f;
-                constexpr float pwm_cap         = 900.0f;
+                const float pwm_fast_onuse = tpu_p ? tpu_p->feed_pwm_hi : 900.0f;
+                const float pwm_cap         = tpu_p ? tpu_p->feed_pwm_hi : 900.0f;
 
-                constexpr float slope =
+                float slope =
                     (pwm_fast_onuse - pwm_lo) / ((target_pct - MC_ON_USE_BAND_LO_DELTA) - pct_fast_onuse);
 
                 retract_hys_active = 0;
@@ -1616,8 +1633,10 @@ public:
                     g_on_use_full_ms[CHx] += (uint32_t)(time_E * 1000.0f + 0.5f);
                     const uint32_t t_full = g_on_use_full_ms[CHx];
 
-                    // 超过 5 秒仍顶满 = 真堵, 停机报红灯(与现有堵料红灯逻辑一致)
-                    if (t_full >= 5000u)
+                    // 超过阈值仍顶满 = 真堵, 停机报红灯(与现有堵料红灯逻辑一致)
+                    // v4.0-tpu: 软料弹性大, 缓冲头易"假顶满", 阈值放宽到 jam_ms。
+                    const uint32_t jam_thresh = tpu_p ? tpu_p->jam_ms : 5000u;
+                    if (t_full >= jam_thresh)
                     {
                         auto &A = ams[motion_control_ams_num];
                         g_on_use_jam_latch[CHx] = 1u;
@@ -1635,13 +1654,22 @@ public:
                     // 顶满但 <5s: 亮黄灯(保护避让, 不是故障)
                     MC_STU_RGB_set(CHx, 0xFFu, 0xFFu, 0x00u);
 
-                    // 第 1 段(0~2s): 用中等力气往前推一把, 协助顶过五通/送进挤出机
-                    // 第 2 段(2~5s): 力气减到很小, 只保持不后退, 等打印机把料拉走
+                    // 三段式避让（软料弹性大，避免误报堵料与啃料）：
+                    //   第 1 段(0~phase1_ms): 中力推一把，协助顶过五通/送进挤出机
+                    //   第 2 段(phase1_ms~phase1_ms+phase2_ms): 轻压保持，等打印机把料拉走
+                    //   第 3 段(>phase1_ms+phase2_ms, 仍 < jam_ms): 更保守轻压（phase2_lim 一半）
+                    // v4.0-tpu: 时间窗与力度按型号放宽/减小。
+                    const uint32_t phase1_ms = tpu_p ? tpu_p->phase1_ms : 2000u;
+                    const uint32_t phase2_ms = tpu_p ? tpu_p->phase2_ms : 3000u;
+                    const float phase1_lim   = tpu_p ? tpu_p->phase1_lim : 600.0f;
+                    const float phase2_lim   = tpu_p ? tpu_p->phase2_lim : 180.0f;
                     float lim_f;
-                    if (t_full < 2000u)
-                        lim_f = 600.0f;          // 中力推一把
+                    if (t_full < phase1_ms)
+                        lim_f = phase1_lim;                                 // 中力推一把
+                    else if (t_full < phase1_ms + phase2_ms)
+                        lim_f = phase2_lim;                                 // 轻压保持
                     else
-                        lim_f = 180.0f;          // 轻压保持
+                        lim_f = phase2_lim * 0.5f;                          // 超长顶满，更保守
 
                     x = dir * PID_pressure.caculate(err, time_E);
 
@@ -2266,7 +2294,14 @@ static auto dm_ar_finish_pullback = [](uint8_t i, uint64_t t_now) -> void
                 g_pull_remain_m[i]  = 0.0f;
                 g_pull_speed_set[i] = -PULL_V_FAST;
                 MOTOR_CONTROL[i].set_motion(filament_motion_enum::filament_motion_stop, 100, time_now);
-                filament_pull_back_target[i] = motion_control_pull_back_distance;
+                // v4.0-tpu: TPU 软料回弹，固定长度回抽额外多退 pull_comp_m（仅该通道识别为 TPU 时）
+                float pull_target = motion_control_pull_back_distance;
+                if (A.filament[i].filament_type == _filament_type::tpu)
+                {
+                    const _tpu_param *tp = tpu_param_lookup(A.filament[i].bambubus_filament_id);
+                    pull_target += tp->pull_comp_m;
+                }
+                filament_pull_back_target[i] = pull_target;
                 filament_now_position[i] = filament_redetect;
             }
             else if (MC_ONLINE_key_stu[i] == 0)
@@ -2274,7 +2309,14 @@ static auto dm_ar_finish_pullback = [](uint8_t i, uint64_t t_now) -> void
                 g_pull_remain_m[i]  = 0.0f;
                 g_pull_speed_set[i] = -PULL_V_FAST;
                 MOTOR_CONTROL[i].set_motion(filament_motion_enum::filament_motion_stop, 100, time_now);
-                filament_pull_back_target[i] = motion_control_pull_back_distance;
+                // v4.0-tpu: TPU 软料回弹，固定长度回抽额外多退 pull_comp_m（仅该通道识别为 TPU 时）
+                float pull_target = motion_control_pull_back_distance;
+                if (A.filament[i].filament_type == _filament_type::tpu)
+                {
+                    const _tpu_param *tp = tpu_param_lookup(A.filament[i].bambubus_filament_id);
+                    pull_target += tp->pull_comp_m;
+                }
+                filament_pull_back_target[i] = pull_target;
                 filament_now_position[i] = filament_redetect;
             }
             else

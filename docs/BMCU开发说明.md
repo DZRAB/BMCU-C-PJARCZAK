@@ -317,6 +317,157 @@ NVM 位于 Flash 末 **4KB 扇区**（`0x0800F000`，CH32V203C8 结束于 `0x080
 - 系统灯：正常心跳时浅灰（`0x38,0x35,0x32`）；总线错误时红色（`0x10,0,0`）。
 - 打印机启动会报 **HMS 警告**（来自 `0x20` 心跳握手），属已知可接受行为，不阻断打印。
 - 首次刷写必须**所有通道为空**；否则取出 filament 后按住 buffer 约 5s 重新校准。
+
+---
+
+## 12. v4.0-tpu 开发说明（TPU 软料送料）
+
+> 本章记录 `dev/v4.0-tpu` 分支针对 TPU 软料送料所做的开发细节。用户视角见
+> [`docs_release/v4.0-tpu发布说明.md`](./docs_release/v4.0-tpu发布说明.md)。
+
+### 12.1 背景与设计动机
+
+BMCU 的 on_use 送料闭环（见第 6 章）原本假设料是「刚性、低摩擦、可压缩性小」的（PLA/PETG 接近）。
+对 TPU 这类**高弹性、高摩擦、易堆料**的软料，原闭环会出问题：
+
+- 缓冲头压力判定失真（弹性料顶不进挤出机却显示「顶满」）→ 误报堵料红灯；
+- 推力过大啃料/堆料，过小送不动；
+- 固定长度回抽后 TPU 回弹，实际送料量不足。
+
+**核心决策：双轨固件**
+
+1. **通用固件（默认全量产出，推荐）**
+   - 编译时**不需要**指定 TPU 型号。
+   - 装料后打印机会把**当前通道材料型号**下发给 BMCU；BMCU 读到某通道是 TPU（如 `GFU90`）
+     后，**只对那个通道切换成对应 TPU 型号的软料推力参数**，其他通道（PLA/PETG…）仍走原 v3.2 刚性推力。
+   - 打印过程不改材料，直到更换/重设材料才更新该通道参数。
+   - 任何通道都不设 TPU 时，固件行为 = 原版 v3.2，**零差异**（参数表虽编入固件，但未被任何通道触发）。
+
+2. **专用固件（兜底，仅老打印机用）**
+   - 部分老打印机/AMS 无法下发或识别 TPU 耗材型号，BMCU 无从运行时识别。
+   - 编译时选定一个 TPU 型号（`BMCU_TPU_MODEL=GFU90`），单独生成专用固件刷入，
+     **所有通道强制按该型号参数送料**，不依赖打印机下发。
+   - 适用「整台只打 TPU、且打印机不支持材料设置」的妥协场景。
+
+最常用场景：**一个通道放 TPU、其他通道放 PLA 做支撑**（如 TPU 壳体 + PLA 支撑）。
+一块通用固件通吃，哪个槽放 TPU 哪个槽自动优化。
+
+### 12.2 分支与约束（实现前提）
+
+| 项 | 约束 |
+|---|---|
+| `main` | 保持与原作者镜像一致，不动 |
+| `dev/grid` | 二次开发主分支 |
+| `dev/v4.0-tpu` | 本次 TPU 开发分支 |
+| `version` 文件 | 保持 `10.50.00.00`，不动（版本靠 git 标签区分） |
+| `platformio.ini` | 原版脚本，绝对不动；所有变体通过构建脚本注入宏实现 |
+
+### 12.3 改动清单
+
+**新增 `src/tpu_params.h`（TPU 送料参数表）**
+- `_tpu_model` 枚举：按 Bambu filament_id 前缀/型号对应（GFU98/GFU00/GFU02/GFU95/GFU90/GFU85）。
+- `_tpu_param` 结构体：每个型号的完整送料参数。
+- `TPU_PARAMS[]`：参数表（按硬度分级，初值待实测校准）。
+- `tpu_param_lookup(const char *filament_id)`：**运行时**按 filament_id 前 4 字符查表；
+  找不到返回最软项（TPU_85A），保证「未知 TPU 也走最保守参数」。
+- `TPU_SELECTED_ID` / `tpu_param_selected()`：**仅**在 `BMCU_TPU_MODEL` 定义时存在，供专用固件编译期锁定型号。
+- 关键改动：参数表与 `tpu_param_lookup()` 从 `#ifdef BMCU_TPU_MODEL` 内**移出**，改为无条件编译进固件，
+  使通用固件在运行时也能查表（否则无法「按通道识别 TPU」）。
+
+**修改 `src/ams.h`**
+- 新增 `_filament_type` 枚举：`unknown / pla / petg / abs / pa / tpu / other`。
+- `_filament` 结构体新增 `filament_type` 字段（uint8_t，默认 `unknown`）。
+
+**修改 `src/bambu_bus_ams.cpp`**
+- 新增 `bambubus_filament_id_to_type()`：把 Bambu filament_id（如 `GFU90`）映射到 `_filament_type::tpu`。
+- 在两处材料下发回调（`set_filament`、`set_filament_type2`）写入 `filament[ch].filament_type`。
+  这正是「装料下发 → 识别材料 → 设置该通道推力」的触发点。
+
+**修改 `src/Motion_control.cpp`（on_use 闭环接入 TPU 参数）**
+- `run()` 的 on_use 段新增按通道决策：
+  - 专用固件（`BMCU_TPU_MODEL` 定义）：`tpu_p = tpu_param_selected()`，所有通道强制用编译期型号。
+  - 通用固件：`if (filament[CHx].filament_type == tpu) tpu_p = tpu_param_lookup(filament[CHx].bambubus_filament_id);`
+    否则 `tpu_p == nullptr`，走原 v3.2 常量。
+- 接入的全部参数字段：
+  - `on_use_target_pct` / `on_use_band_hi`：目标压力带（通用/专用共用同一覆盖点）。
+  - `feed_pwm_hi` / `feed_pwm_lo`：on_use 主路 PWM 推力上限，TPU 降级防过推/啃料。
+  - `phase1_ms` / `phase2_ms` / `jam_ms`：三段式堵料避让时间窗（见 12.4）。
+  - `phase1_lim` / `phase2_lim`：避让段力度上限，TPU 减小防啃料。
+  - `pull_comp_m`：固定长度回抽时 TPU 通道额外多退的补偿长度（解决回弹送料不足）。
+
+**修改 `build_one.sh`（单编脚本）**
+- 第 7 参数 `TPU_MODEL`：`TPU_MODEL=GFU90 bash build_one.sh ...` 编译专用固件。
+- 通过 `PLATFORMIO_BUILD_FLAGS="-DBMCU_TPU_MODEL=${TPU_MODEL}"` 注入（不改 `platformio.ini`）。
+- TPU 模式忽略 `MODE` 推力参数，固定标准推力基准（P1S=0, SOFT_LOAD=0），目录层用型号名顶替原模式层
+  （如 `single_build/TPU_GFU90/GFU90/...`，不再有 `standard(A1)/high_force_load(P1S)/soft_load(A1)` 三套）。
+- 选型指南复制逻辑加 `tpu_dir` 前缀，避免生成错位重复文件夹。
+
+**修改 `build_all_firmwares_fast.py`（全量快速编译）**
+- 顶部读取 `BMCU_TPU_MODEL` / `TPU_OUT_DIR` 环境变量。
+- `scan_macros` 额外扫描 `BMCU_TPU_MODEL`（仅用于源文件分类，不影响 flags 注入），
+  确保引用该宏的源（如 `bambu_bus_ams.cpp`）在 TPU 分支被正确重编。
+- TPU 分支：INVARIANT 源直接复用常规已编译的不变 `.o`（不重编），仅 OTHER/RETRACT 中引用 TPU 宏的源重编。
+- TPU 模式 `MODES` 只取标准推力一项（型号名顶替模式层），全量从 972 降到 **324** 个。
+- TPU 链接产物输出到独立的 `firmwares-tpu/{型号}/...`，不污染常规 `firmwares/` 矩阵。
+- TPU 模式跳过常规 `firmwares/` 写盘（避免混入型号目录）。
+
+**修改 `clean_build.sh` / `.gitignore`**
+- `clean_build.sh` 的 `DIRS` 增加 `firmwares-tpu` `firmwares_Release`。
+- `.gitignore` 忽略 `firmwares-tpu/`（固件产出与编译产物不入库，发布页自行发布）。
+
+### 12.4 三段式堵料避让逻辑（v4.0 新增）
+
+原闭环顶满期只有「中力推一把 → 轻压保持」两段。v4.0 改为**三段**，对软料更友好：
+
+| 阶段 | 时间窗 | 力度上限 | 目的 |
+|---|---|---|---|
+| 第 1 段 | `0 ~ phase1_ms` | `phase1_lim` | 中力推一把，协助顶过五通/送进挤出机 |
+| 第 2 段 | `phase1_ms ~ phase1_ms+phase2_ms` | `phase2_lim` | 轻压保持，等打印机把料拉走 |
+| 第 3 段 | `> phase1_ms+phase2_ms`（仍 `< jam_ms`） | `phase2_lim × 0.5` | 超长顶满时更保守，进一步防误报 |
+| 真堵 | 累计 `> jam_ms` | — | 报堵料红灯（与原逻辑一致） |
+
+所有时间窗/力度按型号在 `tpu_params.h` 中分级，越软的料窗口越长、力度越小。
+
+### 12.5 参数表（`src/tpu_params.h` 字段含义）
+
+| 字段 | 含义 | 趋势（越软越小/越长） |
+|---|---|---|
+| `on_use_target_pct` | 常态送料目标压力带中心 | 越低 |
+| `on_use_band_hi` | 目标压力带上限 | 越低 |
+| `phase1_ms` | 第 1 段中力推时长 | 越长 |
+| `phase2_ms` | 第 2 段轻压时长 | 越长 |
+| `jam_ms` | 真堵阈值（累计顶满） | 越长 |
+| `phase1_lim` | 第 1 段 PWM 上限 | 越小 |
+| `phase2_lim` | 第 2 段 PWM 上限 | 越小 |
+| `feed_pwm_hi` | on_use 主路 PWM 上限（推一把） | 越小 |
+| `feed_pwm_lo` | on_use 主路 PWM 下限（持续推力） | 越小 |
+| `pull_comp_m` | 固定回抽弹性补偿（米） | 越大 |
+
+当前表内 6 档型号（硬度硬→软）：GFU98(68D) > GFU00/GFU95(95A) > GFU90(90A) > GFU85(85A)。
+**表中数值为初值，标注 `[待实测]` 的需上机校准后再固化。**
+
+### 12.6 运行时数据流
+
+```
+打印机下发材料型号
+   └─> bambu_bus_ams.cpp: set_filament / set_filament_type2
+         └─> filament[ch].filament_type = tpu (经 bambubus_filament_id_to_type)
+               └─> Motion_control::run(CHx) on_use 段
+                     ├─ 通用固件: filament_type==tpu ?
+                     │     tpu_p = tpu_param_lookup(filament[ch].bambubus_filament_id)
+                     │     否则 tpu_p = nullptr (走 v3.2 常量)
+                     └─ 专用固件: tpu_p = tpu_param_selected() (编译期锁定)
+                     └─> 用 tpu_p->* 覆盖 on_use 目标带/PWM 上限/避让/回抽补偿
+```
+
+### 12.7 构建与验证
+
+- **通用固件（默认）**：`python build_all_firmwares_fast.py` → 常规 972 个到 `firmwares/`。
+- **专用固件**：`BMCU_TPU_MODEL=GFU90 python build_all_firmwares_fast.py` → 324 个到 `firmwares-tpu/GFU90/...`。
+- **单编调试**：`bash build_one.sh standard 1 1 SOLO 0.30 1`（通用） / `... 1 GFU90`（专用）。
+- 验证要点：通用固件二进制含完整参数表，无 TPU 通道时行为与 v3.2 一致；专用固件走编译期锁定路径。
+- 注：全量快速脚本此前存在 INVARIANT 源重复重编导致的性能问题，已优化（TPU 分支复用常规不变 `.o`），尚未跑全量耗时验证。
+
 - 二代打印机若不被识别，多为信号 A/B 接反，可尝试对调（需明确自己在做什么）。
 - 调试串口日志见 `Debug_log.cpp`（`DEBUG(...)` 宏）。
 

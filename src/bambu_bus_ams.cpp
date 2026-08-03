@@ -13,6 +13,27 @@ uint8_t bambubus_ams_map[4] = {0, 1, 2, 3};
 static void bambubus_build_static_serial(void);
 static uint32_t bambubus_heartbeat_deadline = 0u;
 
+// v4.0-tpu: 由 Bambu filament_id（tray_info_idx）前缀判定材质类型。
+// 编码规则（Bambu Studio DeviceManager.cpp 证实，与打印机固件表一致）：
+//   GFA** = PLA, GFG** = PETG, GFB** = ABS, GFL** = PA, GFU** = TPU（软料）
+// 注意：此函数只做"运行时识别"，用于 RGB/日志；送料控制由编译期
+// BMCU_TPU_MODEL 决定（见 Motion_control.cpp），两者解耦。
+static _filament_type bambubus_filament_id_to_type(const char *id)
+{
+    if (id == nullptr || id[0] == '\0' || id[0] != 'G' || id[1] != 'F')
+        return _filament_type::unknown;
+    switch (id[2])
+    {
+        case 'A': return _filament_type::pla;
+        case 'G': return _filament_type::petg;
+        case 'B': return _filament_type::abs;
+        case 'L': return _filament_type::pa;
+        case 'U': return _filament_type::tpu;
+        default:  return _filament_type::other;
+    }
+}
+
+
 void bambubus_heartbeat_seen_fast(void)
 {
     bambubus_heartbeat_deadline = time_ticks32() + ms_to_ticks32(1000u);
@@ -1134,6 +1155,7 @@ void get_package_set_filament(unsigned char *buf, int length)
 
     _ams *ams_ptr = ams + bambubus_ams_map[fixed_ams_num];
     memcpy(ams_ptr->filament[read_num].bambubus_filament_id, buf + 7, sizeof(ams_ptr->filament[read_num].bambubus_filament_id));
+    ams_ptr->filament[read_num].filament_type = bambubus_filament_id_to_type(ams_ptr->filament[read_num].bambubus_filament_id);
     ams_ptr->filament[read_num].color_R = buf[15];
     ams_ptr->filament[read_num].color_G = buf[16];
     ams_ptr->filament[read_num].color_B = buf[17];
@@ -1165,6 +1187,7 @@ void get_package_set_filament_type2(unsigned char *buf, int length)
     memcpy(ams_ptr->filament[read_num].bambubus_filament_id,
            printer_data_long.datas + 2,
            sizeof(ams_ptr->filament[read_num].bambubus_filament_id));
+    ams_ptr->filament[read_num].filament_type = bambubus_filament_id_to_type(ams_ptr->filament[read_num].bambubus_filament_id);
 
     ams_ptr->filament[read_num].color_R = printer_data_long.datas[10];
     ams_ptr->filament[read_num].color_G = printer_data_long.datas[11];

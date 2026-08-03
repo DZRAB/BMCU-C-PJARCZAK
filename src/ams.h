@@ -13,6 +13,20 @@ enum class _filament_motion : uint8_t
     stop_on_use     = 6    // 07 00
 };
 
+// v4.0-tpu: 由打印机下发的 bambubus_filament_id 解析得到的耗材材质类型。
+// 未定义 BMCU_TPU_MODEL 时本枚举照常存在，但仅用于运行时识别/RGB，
+// 不参与送料控制（送料控制在编译期由 BMCU_TPU_MODEL 决定）。
+enum class _filament_type : uint8_t
+{
+    unknown = 0,   // 未识别 / 默认（按刚性料 PLA/PETG 行为）
+    pla     = 1,   // GFA**
+    petg    = 2,   // GFG**
+    abs     = 3,   // GFB**
+    pa      = 4,   // GFL**
+    tpu     = 5,   // GFU**  (软料，v4.0 专用参数针对此类型)
+    other   = 6
+};
+
 struct _filament
 {
     // 耗材参数信息字段
@@ -37,6 +51,7 @@ struct _filament
     bool online = true;
     _filament_motion motion = _filament_motion::idle;
     uint8_t seal_status = 0;            // 0:无密封结构 1:已开盖 2:已合盖
+    _filament_type filament_type = _filament_type::unknown; // v4.0-tpu: 运行时识别的材质类型
     int8_t compartment_temperature = 22; // 温度:-128℃到127℃
     uint8_t compartment_humidity = 20;   // 湿度：0%到100%
 
@@ -67,6 +82,7 @@ struct _filament
         meters_virtual_count = 0;
         online = true;
         motion = _filament_motion::idle;
+        filament_type = _filament_type::unknown;
         compartment_temperature = 22;
         compartment_humidity = 20;
     }

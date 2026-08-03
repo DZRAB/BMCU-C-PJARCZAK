@@ -4,9 +4,13 @@
 # 删除以下由 PlatformIO 及各编译脚本生成的目录：
 #   .pio            PlatformIO 构建目录（含 .pio/build/fw/firmware.bin 等中间产物）
 #   .pioenvs       旧版 PlatformIO 构建目录（兼容）
-#   firmwares       全部编译 / 快速编译输出（build_all_firmwares_*.sh / *.py）
-#   single_build    单独编译输出（build_one.sh）
+#   firmwares       全部编译 / 快速编译输出（build_all_firmwares_*.sh / *.py，v3.2 常规矩阵）
+#   firmwares-tpu   v4.0-tpu 专用固件输出（build_all_firmwares_fast.py 设 BMCU_TPU_MODEL 时生成）
+#   firmwares_Release  发布归档目录（本地发布打包用，不入库）
+#   single_build    单独编译输出（build_one.sh，含 TPU_*/ 子目录）
 #   .pio_parallel   快速编译脚本缓存目录（build_all_firmwares_fast.py）
+#
+# 注意：以上目录均已写入 .gitignore，不会提交 git；清理仅影响本地构建产物。
 #
 # 用法（在 Git Bash 中运行）：
 #   bash clean_build.sh             # 列出并询问确认后删除（默认，安全）
@@ -15,7 +19,7 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
-DIRS=(.pio .pioenvs firmwares single_build .pio_parallel)
+DIRS=(.pio .pioenvs firmwares firmwares-tpu firmwares_Release single_build .pio_parallel)
 
 FORCE=0
 DRY=0

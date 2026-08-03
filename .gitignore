@@ -4,8 +4,11 @@
 
 # ===== 编译好的固件（通过 GitHub Releases 发布，不入库）=====
 firmwares/
+# v4.0-tpu 专用固件输出目录（build_all_firmwares_fast.py 设 BMCU_TPU_MODEL 时生成），同样不入库
+firmwares-tpu/
 
 # ===== 单独编译（build_one.sh）产物，独立文件夹，不入库 =====
+# 含 TPU_*/ 子目录（build_one.sh 第 7 参数 TPU_MODEL 时生成）
 single_build/
 
 # ===== 高速批量编译脚本的缓存（工具链参数 + 预编译 .o），不入库 =====
