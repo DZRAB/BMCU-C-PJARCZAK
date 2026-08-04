@@ -1655,8 +1655,8 @@ public:
                     MC_STU_RGB_set(CHx, 0xFFu, 0xFFu, 0x00u);
 
                     // 三段式避让（软料弹性大，避免误报堵料与啃料）：
-                    //   第 1 段(0~phase1_ms): 中力推一把，协助顶过五通/送进挤出机
-                    //   第 2 段(phase1_ms~phase1_ms+phase2_ms): 轻压保持，等打印机把料拉走
+                    //   第 1 段(0-phase1_ms): 中力推一把，协助顶过五通/送进挤出机
+                    //   第 2 段(phase1_ms-phase1_ms+phase2_ms): 轻压保持，等打印机把料拉走
                     //   第 3 段(>phase1_ms+phase2_ms, 仍 < jam_ms): 更保守轻压（phase2_lim 一半）
                     // v4.0-tpu: 时间窗与力度按型号放宽/减小。
                     const uint32_t phase1_ms = tpu_p ? tpu_p->phase1_ms : 2000u;

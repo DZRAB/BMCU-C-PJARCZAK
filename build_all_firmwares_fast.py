@@ -42,6 +42,8 @@ OUT_DIR = "firmwares"
 # 仅当设置了环境变量 BMCU_TPU_MODEL（如 GFU98）时才构建 TPU 固件。
 TPU_MODEL = os.environ.get("BMCU_TPU_MODEL", "").strip()
 TPU_OUT_DIR = "firmwares-tpu"
+# TPU 专用固件输出到独立的 firmwares-tpu/，不污染常规 firmwares/
+OUT_ROOT = TPU_OUT_DIR if TPU_MODEL else OUT_DIR
 PIO_ENV = "fw"
 PARALLEL_DIR = ".pio_parallel"
 CACHE_DIR = os.path.join(PARALLEL_DIR, "obj_cache")
@@ -486,7 +488,7 @@ for mode_dir, p1s, soft_load in MODES:
         dm_dir = "AUTOLOAD" if dm == 1 else "NO_AUTOLOAD"
         for rgb in (1, 0):
             rgb_dir = "FILAMENT_RGB_ON" if rgb == 1 else "FILAMENT_RGB_OFF"
-            base = os.path.join(OUT_DIR, mode_dir, dm_dir, rgb_dir)
+            base = os.path.join(OUT_ROOT, mode_dir, dm_dir, rgb_dir)
             if dm == 1 and auto_retract:
                 # 双开关自动回抽：SOLO + AMS_A~D 各 1 个
                 tasks.append((os.path.join(base, "SOLO", f"solo_{AUTO_RETRACT_CAP}f_auto.bin"),
@@ -507,12 +509,13 @@ total_tasks = len(tasks)
 log(f"  共 {total_tasks} 个固件编译任务")
 
 # 创建目录结构 + 复制选型指南（与 softload.sh 一致）
-if os.path.exists(OUT_DIR):
-    shutil.rmtree(OUT_DIR, ignore_errors=True)
-os.makedirs(OUT_DIR, exist_ok=True)
-shutil.copy(TXT_MODE, os.path.join(OUT_DIR, OUT_GUIDE))
+# OUT_ROOT 已在常量区定义（TPU 模式指向 firmwares-tpu/，否则 firmwares/）
+if os.path.exists(OUT_ROOT):
+    shutil.rmtree(OUT_ROOT, ignore_errors=True)
+os.makedirs(OUT_ROOT, exist_ok=True)
+shutil.copy(TXT_MODE, os.path.join(OUT_ROOT, OUT_GUIDE))
 for mode_dir, p1s, soft_load in MODES:
-    mode_base = os.path.join(OUT_DIR, mode_dir)
+    mode_base = os.path.join(OUT_ROOT, mode_dir)
     os.makedirs(mode_base, exist_ok=True)
     shutil.copy(TXT_AUTOLOAD, os.path.join(mode_base, OUT_GUIDE))
     for dm in (1, 0):
@@ -738,8 +741,9 @@ def build_link_objs(vkey, elf_path=None):
     with link_sem:
         r = subprocess.run(link_cmd, capture_output=True, startupinfo=STARTUPINFO, env=link_env)
     if r.returncode != 0:
-        log(f"\n  LINK FAILED {vkey}:\n{r.stderr.decode(errors='replace')[:1500]}")
-        raise subprocess.CalledProcessError(r.returncode, link_cmd)
+        err = r.stderr.decode(errors='replace')[:1500]
+        log(f"\n  LINK FAILED {vkey}:\n{err}")
+        raise RuntimeError(f"LINK FAILED {vkey}: {err}")
     return elf_path
 
 
@@ -803,11 +807,15 @@ link_errors = []
 
 
 def _base_worker(combo):
-    try:
-        return run_base_link(combo)
-    except Exception as e:  # noqa
-        link_errors.append(str(e))
-        return None
+    last = None
+    for attempt in range(2):   # 链接偶发竞争失败则重试一次
+        try:
+            return run_base_link(combo)
+        except Exception as e:  # noqa
+            last = e
+            log(f"  [warn] 基础链接重试 {combo} (attempt {attempt+1}): {e}")
+    link_errors.append(str(last))
+    return None
 
 
 with ThreadPoolExecutor(max_workers=total_jobs) as ex:
@@ -826,11 +834,15 @@ tpu_base_bins = {}
 if TPU_MODEL:
     tpu_base_done_local = [0]
     def _tpu_base_worker(combo):
-        try:
-            return run_tpu_base_link(combo)
-        except Exception as e:  # noqa
-            link_errors.append(str(e))
-            return None
+        last = None
+        for attempt in range(2):   # 链接偶发竞争失败则重试一次
+            try:
+                return run_tpu_base_link(combo)
+            except Exception as e:  # noqa
+                last = e
+                log(f"  [warn] TPU 基础链接重试 {combo} (attempt {attempt+1}): {e}")
+        link_errors.append(str(last))
+        return None
     log(f"开始 TPU 基础链接 (型号={TPU_MODEL}) ...")
     with ThreadPoolExecutor(max_workers=total_jobs) as ex:
         for res in ex.map(_tpu_base_worker, sorted(mode_combos)):
@@ -890,10 +902,10 @@ def patch_and_write(task_item):
     sys.stdout.flush()
 
 
-# v4.0-tpu：TPU 模式下跳过常规 firmwares/ 写盘（避免在其中混入型号层 GFU90 等），
-# 仅写独立的 firmwares-tpu/ 目录。
+# v4.0-tpu：tasks 中的 out_path 已按 OUT_ROOT 生成（TPU 模式指向 firmwares-tpu/），
+# TPU 模式只跑独有的 tpu 写盘分支，不进入常规 patch_and_write。
 if TPU_MODEL:
-    log("  TPU 模式：跳过常规 firmwares/ 写盘，仅输出 firmwares-tpu/")
+    log("  TPU 模式：跳过常规写盘分支，仅输出 firmwares-tpu/")
 else:
     with ThreadPoolExecutor(max_workers=total_jobs) as ex:
         list(ex.map(patch_and_write, tasks))
@@ -931,10 +943,7 @@ if TPU_MODEL:
         with prog_lock:
             done_count += 1
 
-    tpu_tasks = []
-    for (out_path, ams_num, retract_len, dm, rgb, p1s, soft_load) in tasks:
-        tpu_out = out_path.replace(OUT_DIR, TPU_OUT_DIR, 1)
-        tpu_tasks.append((tpu_out, ams_num, retract_len, dm, rgb, p1s, soft_load))
+    tpu_tasks = tasks  # tasks 中的 out_path 已基于 OUT_ROOT(=firmwares-tpu/) 生成
     log(f"开始 TPU 修补写盘 (型号={TPU_MODEL})，共 {len(tpu_tasks)} 个 ...")
     done_count = 0
     with ThreadPoolExecutor(max_workers=total_jobs) as ex:
@@ -954,12 +963,12 @@ else:
 # 第六步：生成 manifest.txt
 # ====================================================================
 log("正在生成 manifest.txt ...")
-manifest_path = os.path.join(OUT_DIR, "manifest.txt")
+manifest_path = os.path.join(OUT_ROOT, "manifest.txt")
 entries = []
-for dirpath, _, filenames in os.walk(OUT_DIR):
+for dirpath, _, filenames in os.walk(OUT_ROOT):
     for fn in filenames:
         p = os.path.join(dirpath, fn)
-        rel = os.path.relpath(p, OUT_DIR).replace(os.sep, "/")
+        rel = os.path.relpath(p, OUT_ROOT).replace(os.sep, "/")
         crc, size = 0, 0
         h = hashlib.sha256()
         with open(p, "rb") as f:
@@ -995,7 +1004,7 @@ log("=" * 60)
 log(f"  固件总数 : {total_tasks}")
 log(f"  成功     : {total_tasks - len(failed_builds)}")
 log(f"  失败     : {len(failed_builds)}")
-log(f"  输出目录 : {OUT_DIR}/")
+log(f"  输出目录 : {OUT_ROOT}/")
 log(f"  Manifest : {manifest_path}")
 log("-" * 60)
 log(f"  提取参数 : {te}分{tse}秒")
