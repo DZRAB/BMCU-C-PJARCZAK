@@ -57,6 +57,10 @@ enum class _tpu_model : uint8_t
 //   feed_pwm_hi       : on_use 主路 PWM 上限（推一把力度，原 MC_LOAD_S2_PWM_HI 约480-550）；软料调小防过推。
 //   feed_pwm_lo       : on_use 主路 PWM 下限（持续推力上限，原 MC_LOAD_S2_PWM_LO=1000）；软料调小防啃料。
 //   pull_comp_m       : 回抽弹性补偿（米），TPU 回弹，固定长度回抽额外多退一点（[待实测]）。
+//   push_cycle_ms     : 间歇送料周期（ms）。TPU 软料不能被持续推力顶着, 否则料被压缩挤出缓冲头间隙。
+//                       周期内分"推窗口(push_on_ms)"和"停窗口(cycle-on)", 停窗口电机停转让料松弛/被拉走。
+//   push_on_ms        : 周期内正向推料窗口时长（ms）。其余时间为停窗口（PWM=0）。
+//                       越软 → 周期越长、推窗口占比越小（85A 停最久, 68D 接近连续）。
 struct _tpu_param
 {
     _tpu_model  model;
@@ -75,6 +79,8 @@ struct _tpu_param
     float feed_pwm_hi;
     float feed_pwm_lo;
     float pull_comp_m;
+    uint16_t push_cycle_ms;
+    uint16_t push_on_ms;
 };
 
 // v4.0-tpu: FILAMENT_RGB 宏关闭时，非 TPU 材质（PLA/PETG/ABS/PA/未知/other）
@@ -89,13 +95,13 @@ struct _tpu_param
 // 越软 → target 越低、band_hi 越低、力度越小、时间窗越长、回抽补偿越大。
 static const _tpu_param TPU_PARAMS[] =
 {
-    // model             id      name           r   g   b   target band_hi p1ms p2ms jamms p1lim p2lim feedhi feedlo pullcomp
-    { _tpu_model::TPU_FOR_AMS,  "GFU98", "TPU for AMS",  0x00u,0x20u,0x20u, 50.0f, 58.0f, 2000, 3000, 6000, 520.0f, 160.0f, 440.0f, 950.0f, 0.01f }, // 68D 青
-    { _tpu_model::TPU_95A_HF,   "GFU00", "TPU 95A HF",   0x00u,0x20u,0x00u, 45.0f, 54.0f, 2500, 4000, 7000, 420.0f, 120.0f, 400.0f, 900.0f, 0.02f }, // 95A HF 绿
-    { _tpu_model::TPU_GEN_AMS,  "GFU02", "Generic TPU",  0x18u,0x00u,0x20u, 50.0f, 58.0f, 2000, 3000, 6000, 520.0f, 160.0f, 440.0f, 950.0f, 0.01f }, // 约68D 紫
-    { _tpu_model::TPU_95A,      "GFU95", "TPU 95A",      0x20u,0x18u,0x00u, 45.0f, 54.0f, 2500, 4000, 7000, 420.0f, 120.0f, 400.0f, 900.0f, 0.02f }, // 95A 黄
-    { _tpu_model::TPU_90A,      "GFU90", "TPU 90A",      0x20u,0x0Au,0x00u, 40.0f, 50.0f, 3000, 5000, 8000, 360.0f, 100.0f, 360.0f, 850.0f, 0.03f }, // 90A 橙
-    { _tpu_model::TPU_85A,      "GFU85", "TPU 85A",      0x20u,0x00u,0x00u, 35.0f, 46.0f, 3500, 6000, 9000, 300.0f,  80.0f, 320.0f, 800.0f, 0.04f }, // 85A 红
+    // model             id      name           r   g   b   target band_hi p1ms p2ms jamms p1lim p2lim feedhi feedlo pullcomp  cyc  on
+    { _tpu_model::TPU_FOR_AMS,  "GFU98", "TPU for AMS",  0x00u,0x20u,0x20u, 50.0f, 58.0f, 2000, 3000, 6000, 520.0f, 160.0f, 440.0f, 950.0f, 0.01f, 800, 500 }, // 68D 青
+    { _tpu_model::TPU_95A_HF,   "GFU00", "TPU 95A HF",   0x00u,0x20u,0x00u, 45.0f, 54.0f, 2500, 4000, 7000, 420.0f, 120.0f, 400.0f, 900.0f, 0.02f, 900, 450 }, // 95A HF 绿
+    { _tpu_model::TPU_GEN_AMS,  "GFU02", "Generic TPU",  0x18u,0x00u,0x20u, 50.0f, 58.0f, 2000, 3000, 6000, 520.0f, 160.0f, 440.0f, 950.0f, 0.01f, 800, 500 }, // 约68D 紫
+    { _tpu_model::TPU_95A,      "GFU95", "TPU 95A",      0x20u,0x18u,0x00u, 45.0f, 54.0f, 2500, 4000, 7000, 420.0f, 120.0f, 400.0f, 900.0f, 0.02f, 900, 420 }, // 95A 黄
+    { _tpu_model::TPU_90A,      "GFU90", "TPU 90A",      0x20u,0x0Au,0x00u, 40.0f, 50.0f, 3000, 5000, 8000, 360.0f, 100.0f, 360.0f, 850.0f, 0.03f,1000, 400 }, // 90A 橙
+    { _tpu_model::TPU_85A,      "GFU85", "TPU 85A",      0x20u,0x00u,0x00u, 35.0f, 46.0f, 3500, 6000, 9000, 300.0f,  80.0f, 320.0f, 800.0f, 0.04f,1200, 400 }, // 85A 红
 };
 static const int TPU_PARAMS_N = (int)(sizeof(TPU_PARAMS) / sizeof(TPU_PARAMS[0]));
 

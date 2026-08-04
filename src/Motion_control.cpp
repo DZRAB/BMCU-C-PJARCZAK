@@ -952,7 +952,8 @@ public:
         float &x,
         bool  &on_use_need_move,
         float &on_use_abs_err,
-        bool  &on_use_linear
+        bool  &on_use_linear,
+        const _tpu_param *tpu_p = nullptr
     )
     {
         constexpr float hold_target = MC_LOAD_S2_HOLD_TARGET_PCT;
@@ -996,9 +997,10 @@ public:
 
             constexpr float push_hi_pct    = hold_target - MC_LOAD_S2_HOLD_BAND_LO_DELTA;
             constexpr float push_start_pct = MC_LOAD_S2_PUSH_START_PCT;
-            constexpr float pwm_hi         = MC_LOAD_S2_PWM_HI;
-            constexpr float pwm_lo         = MC_LOAD_S2_PWM_LO;
-            constexpr float slope          = (pwm_lo - pwm_hi) / (push_hi_pct - push_start_pct);
+            // v4.0-tpu: TPU 通道 Stage2 装填也降级推力(软料防过推/挤出)
+            const float pwm_hi = tpu_p ? tpu_p->feed_pwm_hi : MC_LOAD_S2_PWM_HI;
+            const float pwm_lo = tpu_p ? tpu_p->feed_pwm_lo : MC_LOAD_S2_PWM_LO;
+            const float slope          = (pwm_lo - pwm_hi) / (push_hi_pct - push_start_pct);
 
             if (pct >= push_hi_pct)
             {
@@ -1061,6 +1063,9 @@ public:
         float speed_set = 0.0f;
         const float now_speed = speed_as5600[CHx];
         float x = 0.0f;
+
+        // v4.0-tpu: TPU 通道识别结果(函数级, 供末尾间歇送料门控统一使用)
+        const _tpu_param *tpu_p_run = nullptr;
 #if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
         bool  dm_autoload_active = false;
         float dm_autoload_x      = 0.0f;
@@ -1521,7 +1526,8 @@ public:
                     x,
                     on_use_need_move,
                     on_use_abs_err,
-                    on_use_linear
+                    on_use_linear,
+                    tpu_p_run
                 );
             }
             else if (motion == filament_motion_enum::filament_motion_stop_on_use)
@@ -1542,11 +1548,16 @@ public:
                 //    其他通道（PLA/PETG/...）tpu_p 为 nullptr，走原刚性常量，
                 //    行为与 v3.2 完全一致（零差异）。
                 const _tpu_param *tpu_p = nullptr;
+                tpu_p_run = nullptr;
 #ifdef BMCU_TPU_MODEL
                 tpu_p = tpu_param_selected();
+                tpu_p_run = tpu_p;
 #else
                 if (ams[motion_control_ams_num].filament[CHx].filament_type == _filament_type::tpu)
+                {
                     tpu_p = tpu_param_lookup(ams[motion_control_ams_num].filament[CHx].bambubus_filament_id);
+                    tpu_p_run = tpu_p;
+                }
 #endif
 
                 // 送料目标带：默认取通用(刚性料)常量；TPU 通道用对应型号参数。
@@ -1586,7 +1597,8 @@ public:
                 // v4.0-tpu: 常态 on_use 推力上限按 TPU 型号降级（软料防过推/啃料）。
                 // 非 TPU 通道用原 v3.2 常量。
                 const float pwm_lo = tpu_p ? tpu_p->feed_pwm_lo : 380.0f;
-                constexpr float pct_fast_onuse  = 50.0f;
+                // v4.0-tpu: 快推触发点跟随目标带, 避免 TPU(target 较低) 小幅回落就给大推力
+                const float pct_fast_onuse = tpu_p ? (target_pct + 5.0f) : 50.0f;
                 const float pwm_fast_onuse = tpu_p ? tpu_p->feed_pwm_hi : 900.0f;
                 const float pwm_cap         = tpu_p ? tpu_p->feed_pwm_hi : 900.0f;
 
@@ -1765,7 +1777,8 @@ public:
                             x,
                             on_use_need_move,
                             on_use_abs_err,
-                            on_use_linear
+                            on_use_linear,
+                            tpu_p_run
                         );
                     }
                     else
@@ -1976,7 +1989,7 @@ public:
             if (x > hi) x = hi;
         }
 
-        const int pwm_out0 = (int)x;
+        int pwm_out0 = (int)x;
 
         if (motion == filament_motion_enum::filament_motion_pressure_ctrl_on_use && !g_on_use_low_latch[CHx])
         {
@@ -2045,6 +2058,27 @@ public:
         else
         {
             g_on_use_hi_pwm_us[CHx] = 0u;
+        }
+
+        // v4.0-tpu: TPU 间歇送料门控（统一出口，覆盖 Stage2 装填/on_use/避让所有分支）
+        // 软料不能被持续推力顶着, 否则料被压缩、从缓冲头间隙挤出、进不了管。
+        // 周期内分"推窗口(push_on_ms, 正常给 PWM)"和"停窗口(剩余时间, 强制 PWM=0)",
+        // 停窗口让电机停转、料松弛/被打印机拉走, 下一推窗口再补。越软停越久。
+        // 仅在 TPU 通道且为"往前送料"(x 与 dir 同向)时生效；回退/拉料不受影响。
+        if (tpu_p_run != nullptr)
+        {
+            const uint16_t cyc = tpu_p_run->push_cycle_ms;
+            const uint16_t on  = tpu_p_run->push_on_ms;
+            if (cyc > 0u && on < cyc)
+            {
+                const uint32_t phase = (uint32_t)(now_ms % (uint64_t)cyc);
+                // x 与 dir 同向 -> 正向往前送料; 异向 -> 回退/拉料(不截断)
+                const bool pushing_fwd = (dir != 0.0f) && (((float)pwm_out0) * dir > 0.0f);
+                if (pushing_fwd && phase >= (uint32_t)on)
+                {
+                    pwm_out0 = 0;   // 停窗口: 电机停转, 让软料松弛
+                }
+            }
         }
 
         const int pwm_out = pwm_out0;

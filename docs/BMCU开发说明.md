@@ -889,4 +889,77 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
 - 行为验证（需上板）：无 AHT20 → 系统灯仅红/白、温湿度上报 22/20；
   有 AHT20 且通讯正常 → 每 10 秒紫呼吸一次；人为制造读取失败 → 每 10 秒琥珀闪一次、温湿度保持上次值。
 
+### 13.11 TPU 间歇送料 + Stage2 装填降级（解决软料被挤出缓冲头间隙）
+
+> 本节记录 `dev/v4.0-tpu` 分支在 13.2/13.4 基础上，针对实测问题的二次增强。
+> 背景：实测 `GFU95`（TPU 95A，RGB 识别色确认已识别为黄色 TPU）时，料不从管道正常进入，
+> 而是被连续推力从缓冲头（buffer）间隙挤出来。根因是此前 TPU 降级**只覆盖了 on_use 常态闭环**
+> （表 A 的 `feed_pwm_hi/lo`），而**Stage2 装填阶段与"持续转"行为未处理**，软料被持续猛推导致挤出。
+
+#### 13.11.1 问题根因
+
+- **Stage2 装填阶段未接 TPU 降级**：`hold_load()`（装填保持逻辑）原用 `MC_LOAD_S2_PWM_HI/LO` 硬编码常量
+  （`_S2_PWM_LO = 1000` 全速），**完全没接 `tpu_p->feed_pwm_hi/lo`**。即 TPU 在装填那一脚仍走刚性料 1000 全速，
+  软料被猛推、堆积挤出缓冲头间隙——正是实测现象。
+- **on_use 持续转动、无间歇**：原 on_use 闭环是连续 PWM 闭环，只要缓冲头低于目标就持续转。对刚性料没问题，
+  对软料则一直被顶着压缩，料不前进反而从间隙溢出。TPU 需要「推一下、停一下」的**间歇脉冲式送料**，
+  让料在停窗口里被打印机拉走/自身松弛，避免堆积。
+- **`pct_fast_onuse` 硬编码 50% 对软料偏高**：95A 的 `target=45`，原 `pct_fast_onuse=50` 导致缓冲头稍回落就给大推力，
+  加剧过推。
+
+#### 13.11.2 改动清单
+
+**`src/tpu_params.h`**：`_tpu_param` 结构新增两个字段，参数表逐型号补初值（越软停越久）：
+
+| filament_id | 型号 | `push_cycle_ms`（周期） | `push_on_ms`（推窗口） |
+|---|---|---|---|
+| GFU98 / GFU02 | 68D | 800 | 500 |
+| GFU00 / GFU95 | 95A | 900 | 420~450 |
+| GFU90 | 90A | 1000 | 400 |
+| GFU85 | 85A | 1200 | 400 |
+
+> 周期内分「推窗口（`push_on_ms`，正常给 PWM）」与「停窗口（剩余时间，PWM 强制为 0）」。
+> 越软 → 周期越长、推窗口占比越小（85A 停窗口最久）。
+
+**`src/Motion_control.cpp`**：
+
+1. **Stage2 装填接 TPU 降级**：`hold_load()` 新增参数 `const _tpu_param *tpu_p = nullptr`；
+   内部 `pwm_hi/pwm_lo` 改为 `tpu_p ? tpu_p->feed_pwm_hi/lo : MC_LOAD_S2_PWM_HI/LO`。
+   两处 `hold_load()` 调用（`send_out` 装填段、`on_use` 前段）传入 `tpu_p_run`（见下）。
+   装填阶段 TPU（`feed_pwm_lo≈800~900`）不再用刚性料 1000 全速夯。
+
+2. **`pct_fast_onuse` 跟随 TPU target**：`tpu_p ? (target_pct + 5.0f) : 50.0f`，
+   避免软料小幅回落即触发大推力。
+
+3. **核心新增——间歇送料统一门控**：把 `tpu_p` 提升到 `run()` 函数级（`tpu_p_run`，
+   专用/通用两分支均赋值）。在 PWM 统一出口（`Motion_control_set_PWM` 之前）插入：
+   ```cpp
+   if (tpu_p_run != nullptr)
+   {
+       const uint16_t cyc = tpu_p_run->push_cycle_ms;
+       const uint16_t on  = tpu_p_run->push_on_ms;
+       if (cyc > 0u && on < cyc)
+       {
+           const uint32_t phase = (uint32_t)(now_ms % (uint64_t)cyc);
+           const bool pushing_fwd = (dir != 0.0f) && (((float)pwm_out0) * dir > 0.0f);
+           if (pushing_fwd && phase >= (uint32_t)on)
+               pwm_out0 = 0;   // 停窗口: 电机停转, 让软料松弛/被打印机拉走
+       }
+   }
+   ```
+   - 仅对 TPU 通道、**正向往前送料**（`x` 与 `dir` 同向）生效；回退/拉料（`x*dir ≤ 0`）不受影响，保证回抽正常。
+   - 覆盖 Stage2 装填 / on_use 常态 / 顶满避让**所有正向送料分支**，刚性料（`tpu_p_run==nullptr`）零差异。
+   - `pwm_out0` 由 `const int` 改为 `int` 以支持停窗口清零。
+
+#### 13.11.3 效果与验证
+
+- TPU 通道不再是「持续猛推」，而是「推一段（周期 800~1200ms，推窗口约 400~500ms）→ 停一段（电机停转）→ 再推」的
+  间歇脉冲式送料；缓冲头不被持续顶着，软料靠停窗口松弛/被打印机拉走，正常进入管道而非从间隙挤出。
+- 刚性料（PLA/PETG…）完全不受影响（门控条件 `tpu_p_run==nullptr` 直接跳过）。
+- 验证：编译 `build_one.sh standard 1 1 SOLO 0.30 0`（含通用 TPU 运行时识别）通过；
+  上板实测 95A 应见电机间歇转动、料正常入管。
+
+> 注意：本改动在 `dev/v4.0-tpu` 分支，**本地未提交未推送**。间歇周期初值（`push_cycle_ms`/`push_on_ms`）
+> 为基于硬度的经验占位，需实测后按机型校准（越软停越久）。
+
 
