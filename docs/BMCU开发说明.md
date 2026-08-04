@@ -633,10 +633,27 @@ TPU 软、弹性大，缓冲头确实比硬料更难被硬顶满；但这不意�
 
 **新增 `src/tpu_params.h`（TPU 送料参数表）**
 - `_tpu_model` 枚举：按 Bambu filament_id 前缀/型号对应（GFU98/GFU00/GFU02/GFU95/GFU90/GFU85）。
+
+**TPU 型号 RGB 识别色（宏 `BMCU_ONLINE_LED_FILAMENT_RGB` 关闭时显示，用于验证识别）**
+
+| filament_id | 型号 | Shore | RGB（r,g,b） | 颜色 |
+|---|---|---|---|---|
+| GFU98 | TPU for AMS | 68D | 0x00,0x20,0x20 | 青 |
+| GFU00 | TPU 95A HF | 95A | 0x00,0x20,0x00 | 绿 |
+| GFU02 | Generic TPU | 约68D | 0x18,0x00,0x20 | 紫 |
+| GFU95 | TPU 95A | 95A | 0x20,0x18,0x00 | 黄 |
+| GFU90 | TPU 90A | 90A | 0x20,0x0A,0x00 | 橙 |
+| GFU85 | TPU 85A | 85A | 0x20,0x00,0x00 | 红 |
+| 非 TPU（PLA/PETG/ABS/PA/未知/other） | — | — | 0x08,0x08,0x10 | 白偏蓝（统一色） |
+
+> 宏开启时，上述颜色不参与，LED 仍显示打印机下发的真实耗材色（原有功能不变）。
 - `_tpu_param` 结构体：每个型号的完整送料参数。
-- `TPU_PARAMS[]`：参数表（按硬度分级，初值待实测校准）。
+- `TPU_PARAMS[]`：参数表（按硬度分级，初值待实测校准）。每个型号额外带一组 `rgb_r/g/b` 识别纯色
+  （见下表，亮度与普通状态色同档，不刺眼）。
 - `tpu_param_lookup(const char *filament_id)`：**运行时**按 filament_id 前 4 字符查表；
   找不到返回最软项（TPU_85A），保证「未知 TPU 也走最保守参数」。
+- `tpu_model_rgb(_tpu_model, r, g, b)`：查表返回某型号的 RGB 识别色（供 RGB 模块调用）。
+- `TPU_NON_TPU_RGB_R/G/B`：宏关闭时**非 TPU** 材质（PLA/PETG/ABS/PA/未知/other）的统一显示色（白偏蓝）。
 - `TPU_SELECTED_ID` / `tpu_param_selected()`：**仅**在 `BMCU_TPU_MODEL` 定义时存在，供专用固件编译期锁定型号。
 - 关键改动：参数表与 `tpu_param_lookup()` 从 `#ifdef BMCU_TPU_MODEL` 内**移出**，改为无条件编译进固件，
   使通用固件在运行时也能查表（否则无法「按通道识别 TPU」）。
@@ -644,13 +661,21 @@ TPU 软、弹性大，缓冲头确实比硬料更难被硬顶满；但这不意�
 **修改 `src/ams.h`**
 - 新增 `_filament_type` 枚举：`unknown / pla / petg / abs / pa / tpu / other`。
 - `_filament` 结构体新增 `filament_type` 字段（uint8_t，默认 `unknown`）。
+- `_filament` 结构体新增 `tpu_model` 字段（`_tpu_model`，默认 `UNKNOWN`）：识别到 TPU 时记录具体型号，供 RGB 识别色使用。
 
 **修改 `src/bambu_bus_ams.cpp`**
 - 新增 `bambubus_filament_id_to_type()`：把 Bambu filament_id（如 `GFU90`）映射到 `_filament_type::tpu`。
-- 在两处材料下发回调（`set_filament`、`set_filament_type2`）写入 `filament[ch].filament_type`。
-  这正是「装料下发 → 识别材料 → 设置该通道推力」的触发点。
+- 在两处材料下发回调（`set_filament`、`set_filament_type2`）写入 `filament[ch].filament_type`，
+  并同时写入 `filament[ch].tpu_model = tpu_param_lookup(id)->model`。
+  这正是「装料下发 → 识别材料 → 设置该通道推力」的触发点，也为 RGB 识别色提供型号来源。
 
 **修改 `src/Motion_control.cpp`（on_use 闭环接入 TPU 参数）**
+- `MC_PULL_ONLINE_RGB_set` 调用处（`run()` 内 RGB 刷新分支）新增 v4.0-tpu 识别色逻辑：
+  - 宏 `BMCU_ONLINE_LED_FILAMENT_RGB` **开启**：行为不变，按打印机下发真实耗材色显示。
+  - 宏 **关闭**：不再只显示微弱橙状态色，而是按通道识别结果点亮，用于**肉眼验证「程序是否真的识别到 TPU」**：
+    - `filament_type == tpu` → 显示该通道 `tpu_model` 对应的专属纯色（一眼区分是哪种 TPU）；
+    - 非 TPU（PLA/PETG/ABS/PA/未知/other）→ 统一显示 `TPU_NON_TPU_RGB_*` 一种颜色，便于与 TPU 区分。
+  - 识别色走与普通状态色同级的亮度档（不经过下发色 gamma 通道），不刺眼。
 - `run()` 的 on_use 段新增按通道决策（见 13.2）：
   - 专用固件（`BMCU_TPU_MODEL` 定义）：`tpu_p = tpu_param_selected()`，所有通道强制用编译期型号。
   - 通用固件：`if (filament[CHx].filament_type == tpu) tpu_p = tpu_param_lookup(filament[CHx].bambubus_filament_id);`

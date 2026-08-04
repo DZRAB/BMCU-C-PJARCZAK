@@ -2893,9 +2893,20 @@ static void motor_motion_run(int error, uint64_t time_now, uint32_t now_ticks)
             else
 #endif
             {
-                if (key == 0u)
+                // v4.0-tpu: FILAMENT_RGB 宏关闭时，用 RGB 验证"程序是否真的识别到 TPU"。
+                //  - 识别到 TPU（filament_type==tpu）：显示该型号专属纯色（一眼看出是哪种 TPU）
+                //  - 非 TPU（PLA/PETG/ABS/PA/未知/other）：统一显示一种颜色，便于和 TPU 区分
+                if (ams[motion_control_ams_num].filament[i].filament_type == _filament_type::tpu)
                 {
-                    if ((uint8_t)(pct - 49u) <= 2u) { r = 0x10u; g = 0x08u; }
+                    uint8_t tr, tg, tb;
+                    tpu_model_rgb(ams[motion_control_ams_num].filament[i].tpu_model, tr, tg, tb);
+                    r = tr; g = tg; b = tb;
+                }
+                else
+                {
+                    r = TPU_NON_TPU_RGB_R;
+                    g = TPU_NON_TPU_RGB_G;
+                    b = TPU_NON_TPU_RGB_B;
                 }
             }
         }

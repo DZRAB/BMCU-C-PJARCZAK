@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "tpu_params.h"   // v4.0-tpu: 引入 _tpu_model 供 _filament 记录识别到的 TPU 型号
 #define ams_max_number 4
 
 enum class _filament_motion : uint8_t
@@ -52,6 +53,7 @@ struct _filament
     _filament_motion motion = _filament_motion::idle;
     uint8_t seal_status = 0;            // 0:无密封结构 1:已开盖 2:已合盖
     _filament_type filament_type = _filament_type::unknown; // v4.0-tpu: 运行时识别的材质类型
+    _tpu_model tpu_model = _tpu_model::UNKNOWN;              // v4.0-tpu: 识别到 TPU 时的具体型号（用于 RGB 识别色）
     int8_t compartment_temperature = 22; // 温度:-128℃到127℃
     uint8_t compartment_humidity = 20;   // 湿度：0%到100%
 
@@ -83,6 +85,7 @@ struct _filament
         online = true;
         motion = _filament_motion::idle;
         filament_type = _filament_type::unknown;
+        tpu_model = _tpu_model::UNKNOWN;
         compartment_temperature = 22;
         compartment_humidity = 20;
     }

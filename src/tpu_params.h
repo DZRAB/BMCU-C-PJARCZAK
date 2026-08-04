@@ -62,6 +62,9 @@ struct _tpu_param
     _tpu_model  model;
     const char *filament_id;   // Bambu filament_id（前 4 字符匹配，如 "GFU98"）
     const char *name;          // 显示名（用于 RGB/调试）
+    uint8_t rgb_r;             // v4.0-tpu: RGB 识别色（FILAMENT_RGB 宏关时用于验证识别）
+    uint8_t rgb_g;
+    uint8_t rgb_b;
     float on_use_target_pct;
     float on_use_band_hi;
     uint16_t phase1_ms;
@@ -74,20 +77,44 @@ struct _tpu_param
     float pull_comp_m;
 };
 
+// v4.0-tpu: FILAMENT_RGB 宏关闭时，非 TPU 材质（PLA/PETG/ABS/PA/未知/other）
+// 统一显示此颜色，用于和 TPU 识别色区分（"是不是 TPU"一眼可辨）。
+// 用白偏蓝、低亮度，与普通状态色同档，不刺眼。
+#define TPU_NON_TPU_RGB_R  0x08u
+#define TPU_NON_TPU_RGB_G  0x08u
+#define TPU_NON_TPU_RGB_B  0x10u
+
 // ---- 参数表（初值按硬度分级，[待实测] 项为需实校项）-----------------------
 // 硬度排序（硬→软）：68D(for AMS) > 95A > 90A > 85A
 // 越软 → target 越低、band_hi 越低、力度越小、时间窗越长、回抽补偿越大。
 static const _tpu_param TPU_PARAMS[] =
 {
-    // model             id      name                target band_hi p1ms p2ms jamms p1lim p2lim feedhi feedlo pullcomp
-    { _tpu_model::TPU_FOR_AMS,  "GFU98", "TPU for AMS",   50.0f, 58.0f, 2000, 3000, 6000, 520.0f, 160.0f, 440.0f, 950.0f, 0.01f }, // 68D, 接近刚性
-    { _tpu_model::TPU_95A_HF,   "GFU00", "TPU 95A HF",    45.0f, 54.0f, 2500, 4000, 7000, 420.0f, 120.0f, 400.0f, 900.0f, 0.02f }, // 95A HF
-    { _tpu_model::TPU_GEN_AMS,  "GFU02", "Generic TPU",   50.0f, 58.0f, 2000, 3000, 6000, 520.0f, 160.0f, 440.0f, 950.0f, 0.01f }, // 约68D, 同 for AMS
-    { _tpu_model::TPU_95A,      "GFU95", "TPU 95A",       45.0f, 54.0f, 2500, 4000, 7000, 420.0f, 120.0f, 400.0f, 900.0f, 0.02f }, // 95A
-    { _tpu_model::TPU_90A,      "GFU90", "TPU 90A",       40.0f, 50.0f, 3000, 5000, 8000, 360.0f, 100.0f, 360.0f, 850.0f, 0.03f }, // 90A
-    { _tpu_model::TPU_85A,      "GFU85", "TPU 85A",       35.0f, 46.0f, 3500, 6000, 9000, 300.0f,  80.0f, 320.0f, 800.0f, 0.04f }, // 85A, 最软最保守
+    // model             id      name           r   g   b   target band_hi p1ms p2ms jamms p1lim p2lim feedhi feedlo pullcomp
+    { _tpu_model::TPU_FOR_AMS,  "GFU98", "TPU for AMS",  0x00u,0x20u,0x20u, 50.0f, 58.0f, 2000, 3000, 6000, 520.0f, 160.0f, 440.0f, 950.0f, 0.01f }, // 68D 青
+    { _tpu_model::TPU_95A_HF,   "GFU00", "TPU 95A HF",   0x00u,0x20u,0x00u, 45.0f, 54.0f, 2500, 4000, 7000, 420.0f, 120.0f, 400.0f, 900.0f, 0.02f }, // 95A HF 绿
+    { _tpu_model::TPU_GEN_AMS,  "GFU02", "Generic TPU",  0x18u,0x00u,0x20u, 50.0f, 58.0f, 2000, 3000, 6000, 520.0f, 160.0f, 440.0f, 950.0f, 0.01f }, // 约68D 紫
+    { _tpu_model::TPU_95A,      "GFU95", "TPU 95A",      0x20u,0x18u,0x00u, 45.0f, 54.0f, 2500, 4000, 7000, 420.0f, 120.0f, 400.0f, 900.0f, 0.02f }, // 95A 黄
+    { _tpu_model::TPU_90A,      "GFU90", "TPU 90A",      0x20u,0x0Au,0x00u, 40.0f, 50.0f, 3000, 5000, 8000, 360.0f, 100.0f, 360.0f, 850.0f, 0.03f }, // 90A 橙
+    { _tpu_model::TPU_85A,      "GFU85", "TPU 85A",      0x20u,0x00u,0x00u, 35.0f, 46.0f, 3500, 6000, 9000, 300.0f,  80.0f, 320.0f, 800.0f, 0.04f }, // 85A 红
 };
 static const int TPU_PARAMS_N = (int)(sizeof(TPU_PARAMS) / sizeof(TPU_PARAMS[0]));
+
+// v4.0-tpu: 查表返回某型号的 RGB 识别色（FILAMENT_RGB 宏关时用于验证识别）。
+// 找不到（UNKNOWN）返回 0,0,0。
+static inline void tpu_model_rgb(_tpu_model m, uint8_t &r, uint8_t &g, uint8_t &b)
+{
+    for (int i = 0; i < TPU_PARAMS_N; ++i)
+    {
+        if (TPU_PARAMS[i].model == m)
+        {
+            r = TPU_PARAMS[i].rgb_r;
+            g = TPU_PARAMS[i].rgb_g;
+            b = TPU_PARAMS[i].rgb_b;
+            return;
+        }
+    }
+    r = g = b = 0u;
+}
 
 // ---- 根据 filament_id（字符串）查参数表的运行时常量指针 -------------------
 // 匹配前 4 字符（Bambu filament_id 形如 "GFU98"）。找不到返回最软的默认项
