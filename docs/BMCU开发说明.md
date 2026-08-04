@@ -263,7 +263,7 @@ AHUB 用 `CRC->DATAR` 硬件 CRC 外设做 32 位校验（`ahubus_package_add_cr
 - **AS5600 健康门控**：连续失败 `kAS5600_FAIL_TRIP=3` 次判离线并隔离该通道；恢复需 `kAS5600_OK_RECOVER=2` 次连续正常，防止失控。
 - **ADC_DMA**（`ADC_DMA.cpp`）：并行扫描 ADC1+ADC2，DMA 半满/全满后台滤波，约 5ms 更新一次；用于空通道检测电压、DM 微动开关电压。
 - **校准**（`MC_PULL_calibration.cpp`）：首次空通道启动记录每通道“无 filament”检测点（`MC_PULL_V_OFFSET/MIN/MAX`）、霍尔极性（`MC_PULL_POLARITY`）、DM 开关阈值（`MC_DM_KEY_NONE_THRESH`）；按住 buffer 约 5s 可重新校准。
-- **AHT20 温湿度传感器**（`aht20.cpp`）：独立软件 I2C 通道（PB10=SCL / PB11=SDA，两线均开漏 `GPIO_Mode_Out_OD`，符合标准 I2C 规范），**不与** 4 路 AS5600 共用总线。写时拉低=低、释放=靠外部上拉拉高，读 SDA 时切输入上拉（高阻），绝不主动输出强高电平，从根源避免主从电平冲突短路。上电 `init()` 发送 `0xBA` 软复位、`0xE1 0x08 0x00` 初始化；之后每 2 秒由 `main.cpp` 主循环非阻塞采样（先 `start_measure()` 触发测量，约 90ms 后 `get_measure()` 读取 6 字节温湿度，状态位校验）。结果写入 `ams[].filament[].compartment_temperature`（℃）/ `compartment_humidity`（%），由现有 ahub / bambu 协议自动上报打印机。
+- **AHT20 温湿度传感器**（`aht20.cpp`）：独立软件 I2C 通道（PB10=SCL / PB11=SDA，两线均开漏 `GPIO_Mode_Out_OD`，符合标准 I2C 规范），**不与** 4 路 AS5600 共用总线。写时拉低=低、释放=靠外部上拉拉高，读 SDA 时切输入上拉（高阻），绝不主动输出强高电平，从根源避免主从电平冲突短路。上电 `init()` 发送 `0xBA` 软复位、`0xE1 0x08 0x00` 初始化；`init()` 返回后由 `is_online()` 持久记录握手结果（成功=接好，失败=没接/坏了）。**之后仅在 `is_online()` 为真时**才由 `main.cpp` 主循环非阻塞采样：**每 10 秒**一次（先 `start_measure()` 触发测量，约 90ms 后 `get_measure()` 读取 6 字节温湿度，状态位校验）；单次读取失败会**在本轮窗口内重试最多 3 次**，任一次成功即更新值，连续 3 次失败则本次采样失败、温湿度**沿用上一次成功值**（从未成功则保持 `ams.h` 默认值 22℃/20%），下一轮（10s 后）再试。结果写入 `ams[].filament[].compartment_temperature`（℃）/ `compartment_humidity`（%），由现有 ahub / bambu 协议自动上报打印机。AHT20 不在线时 BMCU 完全不采样、温湿度走默认 22/20，核心送料逻辑零影响（详见第 13.10 节）。
 
 ---
 
@@ -318,7 +318,7 @@ NVM 位于 Flash 末 **4KB 扇区**（`0x0800F000`，CH32V203C8 结束于 `0x080
 
 ## 11. 调试与排错提示
 
-- 系统灯：正常心跳时浅灰（`0x38,0x35,0x32`）；总线错误时红色（`0x10,0,0`）。
+- 系统灯（SYS_RGB，主板上单独一颗，非通道灯）：正常心跳时浅灰（`0x38,0x35,0x32`，基色）；总线错误时红色（`0x10,0,0`，基色）。v4.0 在其上叠加 AHT20 呼吸提示：AHT20 本周期成功采样一次 → 浅灰基色上呼吸式混入紫色（`0x60,0,0x80`，约 1s 三角波渐变回基色）；连续 3 次读取失败 → 混入琥珀色（`0xFF,0x60,0`）提示。呼吸提示是瞬态、不覆盖基色，且仅在通讯正常（白基色）时叠加，通讯失败（红）时不闪紫/琥珀，避免混淆。详见第 13.10 节。
 - 打印机启动会报 **HMS 警告**（来自 `0x20` 心跳握手），属已知可接受行为，不阻断打印。
 - 首次刷写必须**所有通道为空**；否则取出 filament 后按住 buffer 约 5s 重新校准。
 
@@ -830,4 +830,63 @@ TPU 与刚性料（PLA/PETG）的本质差异：高弹性、高摩擦、易堆�
 - **单编调试**：`bash build_one.sh standard 1 1 SOLO 0.30 1`（通用） / `... 1 GFU90`（专用）。
 - 验证要点：通用固件二进制含完整参数表，无 TPU 通道时行为与 v3.2 一致；专用固件走编译期锁定路径。
 - 实测耗时：常规全量 1分29秒（972）、TPU 全量 53 秒（324），均零失败。
+
+### 13.10 AHT20 状态灯与读取重试（SYS_RGB 状态机）
+
+**设计目标**：AHT20 是辅助传感器，绝不能因它异常导致 BMCU 掉线/卡死/误报通讯故障。
+同时要让用户能通过**主板系统灯（SYS_RGB）**直观判断 AHT20 是否在正常上报。
+
+**核心原则（不故障）**
+- `aht20.init()` 在开机只握手一次，`is_online()` 永久记录结果；
+- `is_online()==false`（没接/坏了）→ `main.cpp` **完全不进入采样分支**，温湿度保持 `ams.h` 默认 22℃/20%，BMCU 核心送料逻辑零改动；
+- `is_online()==true` 才周期采样；单次读失败**在本轮窗口内重试最多 3 次**；连续 3 次失败仅"本次采样失败"，温湿度**沿用上一次成功值**（从未成功过则保持默认 22/20），绝不清零、绝不回落到特殊值、绝不影响送料。
+
+**SYS_RGB 状态机设计（`src/main.cpp`）**
+
+为了避免 AHT20 的紫/琥珀呼吸与原有"通讯红/白"基色互相覆盖，引入一个轻量状态机，
+由主循环每帧统一刷新灯，所有写灯都收敛到 `sys_rgb_tick()`：
+
+- 基色意图：`sys_rgb_base_t`（RED / WHITE）。原 `main.cpp` 里两处直接 `SYS_RGB.set_RGB(...)`
+  （心跳成功设白、总线错误设红）改为调用 `sys_rgb_set_base(WHITE/RED)`，**不再直接写灯**，
+  灯的实际颜色由 `sys_rgb_tick()` 每帧计算。
+- 呼吸提示：`sys_rgb_trigger_breath(r,g,b)` 启动一次呼吸（记录起始时间 + 目标色 + 激活标志）。
+  每次 `sys_rgb_tick()` 在基色之上，按三角波权重 `w∈[0,1]` 混入呼吸目标色：
+  `out = base*(1-w) + breath*w`，`w` 在 `SYS_RGB_BREATH_MS`(1s) 内 0→1→0，实现呼吸而非硬切。
+- 触发点：
+  - AHT20 成功采样一次 → `sys_rgb_trigger_breath(0x60,0x00,0x80)`（紫）；
+  - 连续 3 次读取失败 → `sys_rgb_trigger_breath(0xFF,0x60,0x00)`（琥珀）。
+- **约束**：呼吸仅在基色为 WHITE（通讯正常）时叠加；基色为 RED（通讯失败）时不做呼吸，
+  避免把"辅助传感器抖动"误显示成"通讯故障红"。
+
+**采样状态机（`main.cpp` 主循环内，非阻塞）**
+
+```
+aht20_next_ms    本轮周期计时（AHT20_PERIOD_MS=10000ms）
+aht20_deadline   单次测量等待（start_measure 后 +90ms）
+aht20_waiting    是否处于"已触发测量、等结果"状态
+aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
+
+每帧：
+  if !is_online():            aht20_waiting=false            // 没传感器就不采样
+  elif 到周期且!waiting:       start_measure(); waiting=true; deadline=now+90
+  if waiting && now>=deadline:
+      if get_measure(t,h) 成功: 写温湿度; 触发紫呼吸; waiting=false; next=now
+      else:
+          retries++
+          if retries<3:   start_measure(); deadline=now+90   // 重试
+          else:           触发琥珀呼吸; waiting=false; next=now  // 3次失败,沿用上次值
+```
+
+**关键实现细节**
+- 重试发生在**同一轮采样窗口内**（`waiting` 期间反复 `start_measure`+等待 90ms），
+  不会跨越 10 秒周期，避免把重试拖成连续高频读。
+- 琥珀提示只表示"本次读取失败"，不表示"AHT20 消失"——`is_online()` 仍为真，
+  下一轮仍正常尝试；只有开机握手失败才彻底不采样。
+- 紫/琥珀呼吸频率自然跟随采样周期（每 10 秒一次），不额外占用主循环时间，状态机无阻塞。
+
+**验证**
+- 双开关 RGB_ON（SOLO 0.30）+ 单开关 RGB_OFF（AMS_D 0.80）均编译通过；
+- 行为验证（需上板）：无 AHT20 → 系统灯仅红/白、温湿度上报 22/20；
+  有 AHT20 且通讯正常 → 每 10 秒紫呼吸一次；人为制造读取失败 → 每 10 秒琥珀闪一次、温湿度保持上次值。
+
 
