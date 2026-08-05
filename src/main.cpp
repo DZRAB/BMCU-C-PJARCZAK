@@ -198,6 +198,27 @@ int main(void)
     ADC_DMA_init();
     ADC_DMA_wait_full();
 
+    // ===== 每次上电都先检测 AHT20 是否存在（不阻塞后续 BMCU 流程）=====
+    // 蓝灯=检测到 AHT20；绿灯=成功读到一次温湿度（可正常工作）；
+    // 检测不到或读失败均不阻塞，立即进入正常 BMCU 逻辑（含首次开机校准）。
+    // 探测以“能否成功读一次温湿度”为准。
+    g_aht20.init();
+    {
+        float t = 0.0f, h = 0.0f;
+        if (g_aht20.read_blocking(t, h))
+        {
+            SYS_RGB.set_RGB(0x00, 0x00, 0x10, 0);   // 蓝灯：检测到 AHT20 且存在
+            RGB_update();
+            delay(200);
+            SYS_RGB.set_RGB(0x00, 0x10, 0x00, 0);   // 绿灯：成功读到温湿度
+            RGB_update();
+            delay(200);
+        }
+        // 读失败=检测不到 AHT20：不亮灯、不阻塞，立即进入正常 BMCU 逻辑
+        SYS_RGB.set_RGB(0x00, 0x00, 0x00, 0);
+        RGB_update();
+    }
+
     MC_PULL_calibration_boot();
     ams_datas_read();
 
@@ -226,7 +247,6 @@ int main(void)
     Motion_control_init();
     bambubus_init();
     bus_init();
-    g_aht20.init();
 
     DEBUG("START\n");
 

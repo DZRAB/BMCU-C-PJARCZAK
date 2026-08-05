@@ -8,10 +8,10 @@
  * AHT20 温湿度传感器驱动（软件 I2C，独立通道）
  *
  *   SCL = PB10  (开漏输出，符合标准 I2C 规范)
- *   SDA = PB11  (开漏输出 —— 关键安全：
+ *   SDA = PB11  (开漏输出，全程开漏：
  *               写时拉低=低电平，释放=靠外部上拉拉高；
- *               读时切输入上拉(高阻)。绝不主动输出强高电平，
- *               避免与从设备电平冲突造成短路/炸电源芯片)
+ *               读时也保持开漏、释放 SDA 靠上拉读 IDR，绝不切输入模式。
+ *               避免 CH32V203 上动态改 CNF/MODE 引起的不稳定)
  *
  * 与打印机通讯：读取到的温湿度填入
  *   ams[].filament[].compartment_temperature / compartment_humidity
@@ -27,7 +27,6 @@ public:
 
     // 初始化软件 I2C 并启动 AHT20（必须在 time_hw_init() 之后调用）
     void init();
-    bool is_online() const { return online_; }
 
     // 阻塞读取一次（用于初始化自检）
     bool read_blocking(float& temperature_c, float& humidity_percent);
@@ -49,37 +48,25 @@ private:
     static constexpr uint8_t ADDR_W = 0x70; // 0x38 << 1
     static constexpr uint8_t ADDR_R = 0x71;
 
-    static constexpr uint8_t CMD_SOFT_RESET = 0xBA;
-    static constexpr uint8_t CMD_INIT       = 0xE1;
     static constexpr uint8_t CMD_MEASURE    = 0xAC;
 
-    bool online_ = false;
+    bool online_ = false;           // 上电自检是否成功检测到 AHT20
     static uint32_t g_iic_delay_ticks;
 
     static inline void gpio_hi(GPIO_TypeDef* p, uint16_t pin) { p->BSHR = pin; }
     static inline void gpio_lo(GPIO_TypeDef* p, uint16_t pin) { p->BCR  = pin; }
 
-    // 修改单个引脚的 4-bit CFG（CNF+MODE），不影响同寄存器其他引脚
-    static inline void gpio_cfg(GPIO_TypeDef* p, uint16_t pinMask, uint32_t cfg4)
-    {
-        uint32_t pin = (uint32_t)__builtin_ctz((uint32_t)pinMask);
-        volatile uint32_t* cfg = (pin < 8u) ? &p->CFGLR : &p->CFGHR;
-        uint32_t shift = (pin & 7u) * 4u;
-        uint32_t v = *cfg;
-        v = (v & ~(0xFu << shift)) | ((cfg4 & 0xFu) << shift);
-        *cfg = v;
-    }
-
     void iic_delay() const { delayTicks32(g_iic_delay_ticks); }
 
-    void sda_input_pu();  // 读：SDA 输入上拉（高阻，靠外部上拉拉高）
-    void sda_output_od(); // 写：SDA 开漏（释放=高，拉低=低；绝不强推高）
+    void sda_release();    // SDA 全程开漏：释放=置高，靠外部上拉拉高（读时仍用此状态）
 
     void iic_start();
     void iic_stop();
     bool iic_write_byte(uint8_t b);   // 返回 true=收到 ACK
     uint8_t iic_read_byte(bool ack);  // ack=true 时回 ACK
 
-    bool sensor_init();               // 发送 0xE1 0x08 0x00 并校验状态 bit2
+    // 官方手册：AHT20 上电即就绪，无需任何初始化/软复位命令（无 0xBA/0xE1 等指令）。
+    // 直接返回 true，存在性由 read_blocking() 发 0xAC 测量命令的 ACK 判定。
+    bool sensor_init();
     bool read_status(uint8_t& status);
 };

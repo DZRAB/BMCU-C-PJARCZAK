@@ -25,9 +25,9 @@ BMCU-C 是 **Bambu Lab AMS（自动多色换料系统）的开源替代固件**�
 本仓库（BMCU-C）基于原作者 **jarczakpawel** 的 BMCU 固件（基线 **V10.5**）二次开发：
 
 - 固件向打印机上报的版本号保持 `10.50`（原作者 V10.5），以维持打印机兼容性识别。
-- 本仓库自身的迭代使用 git 标签管理（如 `v1.0-baseline`、`v2.0-aht20`、`v2.1-aht20`、`v3.0-autoretract`、`v3.1-autoretract`、`v3.2-fix105`），后续版本递增。
+- 本仓库自身的迭代使用 git 标签管理（如 `v1.0-baseline`、`v2.0-aht20`、`v2.1-aht20`、`v3.0-autoretract`、`v3.1-autoretract`、`v3.2-fix105`、`v3.2.1-fix105`），后续版本递增。
 
-其中 `v1.0-baseline` 是基于原作者 V10.5 整理出的可编译、有中文文档的干净基线（修复编译问题、新增编译脚本与说明文档），作为后续开发的起点；`v2.0-aht20` 在其基础上新增 AHT20 温湿度传感器支持（见第 7 章），最新 `v2.1-aht20` 在此基础上新增温湿度探测模式（见第 6 章使用指南）。`v3.0-autoretract` 起引入双开关自动回抽（用 S2 自动判定料根，见第 6.3 节）；`v3.1-autoretract` 修复双开关自动回抽退料后不自动送料；**`v3.2-fix105` 为当前最新，仅修 bug、不改功能**——① 打印机发暂停/停止时 BMCU 若正在送料会立即停机（不再无视指令继续转），② 进料电机控制改为「黄灯三步法」避让（顶满先中力推 2s → 轻压 3s → 超 5s 才报真堵红灯），见第 6.2 节。回退到基线：`git checkout v1.0-baseline`。使用与固件选型见 [`BMCU使用指南.md`](./BMCU使用指南.md)。
+其中 `v1.0-baseline` 是基于原作者 V10.5 整理出的可编译、有中文文档的干净基线（修复编译问题、新增编译脚本与说明文档），作为后续开发的起点；`v2.0-aht20` 在其基础上新增 AHT20 温湿度传感器支持（见第 7 章），最新 `v2.1-aht20` 在此基础上新增温湿度探测模式（见第 6 章使用指南）。`v3.0-autoretract` 起引入双开关自动回抽（用 S2 自动判定料根，见第 6.3 节）；`v3.1-autoretract` 修复双开关自动回抽退料后不自动送料；`v3.2-fix105` 修复「暂停/停止不停机」与「进料电机黄灯三步法避让」（见第 6.2 节）；**`v3.2.1-fix105` 为当前最新，专修 AHT20 温湿度传感器驱动缺陷**（见第 12 章）——3.2 核心功能代码未改动，仅 `src/aht20/`、`src/main.cpp` 自检逻辑有更新。回退到基线：`git checkout v1.0-baseline`。使用与固件选型见 [`BMCU使用指南.md`](./BMCU使用指南.md)。
 
 ---
 
@@ -259,7 +259,7 @@ AHUB 用 `CRC->DATAR` 硬件 CRC 外设做 32 位校验（`ahubus_package_add_cr
 - **AS5600 健康门控**：连续失败 `kAS5600_FAIL_TRIP=3` 次判离线并隔离该通道；恢复需 `kAS5600_OK_RECOVER=2` 次连续正常，防止失控。
 - **ADC_DMA**（`ADC_DMA.cpp`）：并行扫描 ADC1+ADC2，DMA 半满/全满后台滤波，约 5ms 更新一次；用于空通道检测电压、DM 微动开关电压。
 - **校准**（`MC_PULL_calibration.cpp`）：首次空通道启动记录每通道“无 filament”检测点（`MC_PULL_V_OFFSET/MIN/MAX`）、霍尔极性（`MC_PULL_POLARITY`）、DM 开关阈值（`MC_DM_KEY_NONE_THRESH`）；按住 buffer 约 5s 可重新校准。
-- **AHT20 温湿度传感器**（`aht20.cpp`）：独立软件 I2C 通道（PB10=SCL / PB11=SDA，两线均开漏 `GPIO_Mode_Out_OD`，符合标准 I2C 规范），**不与** 4 路 AS5600 共用总线。写时拉低=低、释放=靠外部上拉拉高，读 SDA 时切输入上拉（高阻），绝不主动输出强高电平，从根源避免主从电平冲突短路。上电 `init()` 发送 `0xBA` 软复位、`0xE1 0x08 0x00` 初始化；之后每 2 秒由 `main.cpp` 主循环非阻塞采样（先 `start_measure()` 触发测量，约 90ms 后 `get_measure()` 读取 6 字节温湿度，状态位校验）。结果写入 `ams[].filament[].compartment_temperature`（℃）/ `compartment_humidity`（%），由现有 ahub / bambu 协议自动上报打印机。
+- **AHT20 温湿度传感器**（`aht20.cpp`）：独立软件 I2C 通道（PB10=SCL / PB11=SDA，两线均开漏 `GPIO_Mode_Out_OD`，符合标准 I2C 规范），**不与** 4 路 AS5600 共用总线。写时拉低=低、释放=靠外部上漏拉高，读 SDA 时也保持开漏、释放后靠外部 4.7k 上拉读 IDR（**绝不切输入模式**——CH32V203 上动态改 CNF/MODE 不可靠，曾是该传感器读不到的根因）。严格按官方手册流程：上电等 5ms（`init()` 内 `delay(200)` 稳压）→ 发写测量命令 `0x70 0xAC 0x33 0x00`（`start_measure`）→ 等 ≥80ms（`read_blocking` 内先 `delay(80)` 再轮询状态字 bit7=0 就绪）→ 发 `0x71` 读 7 字节（`get_measure`）：状态字 + SRH[19:0] + ST[19:0] + CRC，换算 `H=rawH/1048576*100%`、`T=rawT/1048576*200-50℃`。**上电自检**：`main.cpp` 在 `MC_PULL_calibration_boot()` 之前调用 `g_aht20.init()` + `read_blocking()`，成功则亮蓝灯→绿灯，失败不阻塞、直接进主程序。之后每 2 秒由主循环非阻塞采样（start_measure → 90ms 后 get_measure），结果写入 `ams[].filament[].compartment_temperature`（℃）/ `compartment_humidity`（%），由现有 ahub / bambu 协议自动上报打印机；未焊接 AHT20 时维持默认值 22℃/20%。
 
 ---
 
@@ -319,6 +319,67 @@ NVM 位于 Flash 末 **4KB 扇区**（`0x0800F000`，CH32V203C8 结束于 `0x080
 - 首次刷写必须**所有通道为空**；否则取出 filament 后按住 buffer 约 5s 重新校准。
 - 二代打印机若不被识别，多为信号 A/B 接反，可尝试对调（需明确自己在做什么）。
 - 调试串口日志见 `Debug_log.cpp`（`DEBUG(...)` 宏）。
+
+---
+
+## 12. AHT20 驱动修复细节（v3.2.1-fix105）
+
+### 12.1 问题背景
+
+早期 AHT20 驱动（v2.0/v2.1 引入）在实机上**读不到温湿度**：上电自检只能亮红灯，打印机长期显示默认 22℃/20%。本版（v3.2.1-fix105）在不改动 3.2 核心功能代码的前提下，仅重构 `src/aht20/` 与 `src/main.cpp` 自检逻辑，彻底修复。
+
+### 12.2 根因：旧驱动发了官方手册不存在的指令
+
+AHT20 官方手册的测量流程只有两步：
+
+1. VDD 上电后等 5ms，发写测量命令 `0x70 0xAC 0x33 0x00`，等待 80ms 测量完成；
+2. 发 `0x71` 读传感器，取状态字 + SRH[19:0] + ST[19:0] + CRC。
+
+旧驱动在 `init()` 里额外发了 `0xBA`（软复位）、`0xE1 0x08 0x00`（初始化）这类**手册上不存在的命令**，给刚上电的 AHT20 发未知命令会使其进入异常状态，导致后续 `0xAC` 测量一直不应答/忙，自检必失败。本版**彻底移除**这些指令，`sensor_init()` 直接返回 `true`（上电即就绪），存在性交由 `read_blocking()` 发 `0xAC` 的 ACK 判定。
+
+### 12.3 配套时序修复（软件 I2C 底层）
+
+逐位对比验证过跑通的 `CH32V203C8T` 测试程序（`AS2/i2c_ch32.c`），修正本仓库手写软件 I2C：
+
+- **开漏全程**：SDA/SCL 均 `GPIO_Mode_Out_OD`，读 SDA 也保持开漏、释放后靠外部 4.7k 上拉读 `IDR`，**绝不切输入模式**（CH32V203 动态改 CNF/MODE 不可靠，是另一潜在不稳定源）。
+- **建立时间**：写位先设定 SDA 电平 → `iic_delay()` → 拉高 SCL 采样，满足 100kHz 时序。
+- **SDA 释放**：读字节结束时补 `sda_release()`，让总线回到 idle 高电平，避免下一 START 采样到错误电平。
+- **bit 顺序**：先 `b<<=1` 再采样，与验证版一致。
+- **延时基准**：`g_iic_delay_ticks = 5 * time_hw_ticks_per_us()`（SysTick 源 HCLK/8 ≈18 ticks/us → 5us = 100kHz）已在 `init()` 正确计算。
+
+### 12.4 上电自检逻辑（不阻塞主程序）
+
+`src/main.cpp` 在 `MC_PULL_calibration_boot()`（首次开机校准）**之前**插入自检块：
+
+```cpp
+g_aht20.init();
+{
+    float t = 0.0f, h = 0.0f;
+    if (g_aht20.read_blocking(t, h)) {      // 成功读到一次温湿度
+        SYS_RGB.set_RGB(0x00,0x00,0x10,0);  // 蓝灯：检测到 AHT20 存在
+        RGB_update(); delay(200);
+        SYS_RGB.set_RGB(0x00,0x10,0x00,0);  // 绿灯：成功读到温湿度
+        RGB_update(); delay(200);
+    }
+    SYS_RGB.set_RGB(0x00,0x00,0x00,0);      // 读失败=不亮灯、不阻塞
+    RGB_update();
+}
+```
+
+- 每次上电都先自检，亮蓝→绿即证明 AHT20 在线且可读；读失败不亮灯、直接进主程序（含校准），**绝不影响换料/通讯**。
+- 自检成功仅代表上电那一刻读到一次；之后每 2 秒由主循环非阻塞采样（`start_measure` → 90ms 后 `get_measure`）持续刷新 `ams[].filament[].compartment_temperature/humidity`，由现有 ahub/bambu 协议自动上报。
+- 自检灯是**系统灯（SYS_RGB）**短暂闪一下，与 4 颗通道灯的状态指示互不冲突。
+
+### 12.5 上电指示灯时序对照（实机现象）
+
+| 阶段 | 灯序 | 含义 |
+|------|------|------|
+| 开机固定 | 红（短） | 正常启动红灯 |
+| AHT20 自检 | 蓝 → 绿（短） | 检测到并读到温湿度 |
+| 校准/初始化 | 灭（首次久、二次快） | 首次开机校准耗时较长 |
+| 主机通讯就绪 | 浅灰 / 依总线状态 | 进入主循环，由 ahub/bambu 协议驱动 |
+
+> 自检蓝→绿亮过即说明驱动修复成功；之后若常亮红灯，是 BMCU 与打印机握手 `error` 分支（与 AHT20 无关，属原有通讯逻辑）。
 
 ---
 

@@ -7,23 +7,17 @@ uint32_t AHT20::g_iic_delay_ticks = 1;
 GPIO_TypeDef* const AHT20::IIC_PORT_SCL = GPIOB;
 GPIO_TypeDef* const AHT20::IIC_PORT_SDA = GPIOB;
 
-// SDA 切输入上拉：CNF/MODE = 1000b（输入 + 上拉/下拉，ODR=1 选上拉）
-void AHT20::sda_input_pu()
+// SDA 全程开漏输出：释放=置高（靠外部上拉拉高），拉低=低电平。
+// 关键修复：CH32V203 上动态切换 CNF/MODE（输出<->输入上拉）不可靠，
+// 故读 SDA 时也保持开漏输出，靠外部 4.7k 上拉读 IDR，绝不切输入模式。
+void AHT20::sda_release()
 {
-    gpio_hi(IIC_PORT_SDA, IIC_PIN_SDA);
-    gpio_cfg(IIC_PORT_SDA, IIC_PIN_SDA, 0x8u);
-}
-
-// SDA 切开漏输出 50MHz：CNF/MODE = 0111b（开漏，释放=高，拉低=低）
-void AHT20::sda_output_od()
-{
-    gpio_cfg(IIC_PORT_SDA, IIC_PIN_SDA, 0x7u);
-    gpio_hi(IIC_PORT_SDA, IIC_PIN_SDA); // 释放为高电平
+    gpio_hi(IIC_PORT_SDA, IIC_PIN_SDA); // 开漏释放 -> 外部上拉拉高
 }
 
 void AHT20::iic_start()
 {
-    sda_output_od();
+    sda_release();
     iic_delay();
     gpio_hi(IIC_PORT_SDA, IIC_PIN_SDA);
     gpio_hi(IIC_PORT_SCL,  IIC_PIN_SCL);
@@ -35,63 +29,61 @@ void AHT20::iic_start()
 
 void AHT20::iic_stop()
 {
-    sda_output_od();
     gpio_lo(IIC_PORT_SCL, IIC_PIN_SCL);
     gpio_lo(IIC_PORT_SDA, IIC_PIN_SDA);
     iic_delay();
     gpio_hi(IIC_PORT_SCL, IIC_PIN_SCL);
     iic_delay();
-    gpio_hi(IIC_PORT_SDA, IIC_PIN_SDA);   // SDA 上升沿 = STOP
+    sda_release();                        // SDA 上升沿 = STOP（开漏释放）
     iic_delay();
 }
 
 bool AHT20::iic_write_byte(uint8_t b)
 {
-    sda_output_od();
     for (uint8_t m = 0x80u; m; m >>= 1)
     {
-        iic_delay();
-        if (b & m) gpio_hi(IIC_PORT_SDA, IIC_PIN_SDA);
+        // 对齐验证版 I2C_WriteBit：先设 SDA，延时建立稳定，再拉高 SCL 采样
+        if (b & m) sda_release();
         else       gpio_lo(IIC_PORT_SDA, IIC_PIN_SDA);
+        iic_delay();
         gpio_hi(IIC_PORT_SCL, IIC_PIN_SCL);
         iic_delay();
         gpio_lo(IIC_PORT_SCL, IIC_PIN_SCL);
     }
-    // 第 9 个时钟读 ACK
-    gpio_hi(IIC_PORT_SDA, IIC_PIN_SDA);   // 释放 SDA（开漏，靠上拉）
-    sda_input_pu();
+    // 第 9 个时钟读 ACK：SDA 全程开漏，释放靠上拉，读 IDR
+    sda_release();
     iic_delay();
     gpio_hi(IIC_PORT_SCL, IIC_PIN_SCL);
     iic_delay();
     bool ack = ((IIC_PORT_SDA->INDR & IIC_PIN_SDA) == 0u); // 从设备拉低 = ACK
     gpio_lo(IIC_PORT_SCL, IIC_PIN_SCL);
     iic_delay();
-    sda_output_od();
     return ack;
 }
 
 uint8_t AHT20::iic_read_byte(bool ack)
 {
-    sda_input_pu();                        // SDA 输入（高阻）
     uint8_t b = 0;
     for (uint8_t i = 0; i < 8; i++)
     {
+        // 对齐验证版 I2C_ReadBit：先移位，再释放 SDA 由从机驱动，SCL 高期间采样
+        b <<= 1;
+        sda_release();                    // 释放 SDA，从机驱动数据
         iic_delay();
         gpio_hi(IIC_PORT_SCL, IIC_PIN_SCL);
         iic_delay();
-        b <<= 1;
         if (IIC_PORT_SDA->INDR & IIC_PIN_SDA) b |= 1u;
         gpio_lo(IIC_PORT_SCL, IIC_PIN_SCL);
     }
-    // 回 ACK / NACK
-    sda_output_od();
-    iic_delay();
+    // 回 ACK / NACK：仍全程开漏
     if (ack) gpio_lo(IIC_PORT_SDA, IIC_PIN_SDA);   // ACK = 拉低
-    else     gpio_hi(IIC_PORT_SDA, IIC_PIN_SDA);   // NACK = 释放高
+    else     sda_release();                        // NACK = 释放高
+    iic_delay();
     gpio_hi(IIC_PORT_SCL, IIC_PIN_SCL);
     iic_delay();
     gpio_lo(IIC_PORT_SCL, IIC_PIN_SCL);
     iic_delay();
+    sda_release();                        // 对齐验证版：读完后释放 SDA 回 idle 高
     return b;
 }
 
@@ -106,26 +98,9 @@ bool AHT20::read_status(uint8_t& status)
 
 bool AHT20::sensor_init()
 {
-    // 软复位（确保干净状态）
-    iic_start();
-    iic_write_byte(ADDR_W);
-    iic_write_byte(CMD_SOFT_RESET);
-    iic_stop();
-    delay(20);
-
-    // 初始化命令 0xE1 0x08 0x00
-    iic_start();
-    iic_write_byte(ADDR_W);
-    iic_write_byte(CMD_INIT);
-    iic_write_byte(0x08);
-    iic_write_byte(0x00);
-    iic_stop();
-    delay(10);
-
-    // 校验校准使能位 bit2（=1 表示已校准）
-    uint8_t status = 0;
-    if (!read_status(status)) return false;
-    return (status & 0x04u) != 0u;
+    // 官方手册：AHT20 上电即就绪，无任何初始化/软复位命令（手册没有 0xBA/0xE1 这类指令）。
+    // 存在性由 read_blocking() 发 0xAC 测量命令的 ACK 判定，这里直接返回 true。
+    return true;
 }
 
 void AHT20::init()
@@ -196,9 +171,20 @@ bool AHT20::get_measure(float& temperature_c, float& humidity_percent)
 
 bool AHT20::read_blocking(float& temperature_c, float& humidity_percent)
 {
-    if (!online_ && !sensor_init()) { online_ = false; return false; }
-    online_ = true;
+    online_ = true;   // 上电自检：能通过 0xAC 测量命令即视为检测到 AHT20
+
     start_measure();
-    delay(90);                            // 等待测量完成（典型 ~80ms）
+
+    // 手册要求：发送测量命令后等待 >=80ms 测量完成。
+    // 先保底 delay(80)，再轮询忙标志（状态字 bit7==0 表示就绪），超时 100ms。
+    delay(80);
+    uint8_t status;
+    for (int t = 0; t < 100; t++) {
+        if (!read_status(status)) return false;
+        if ((status & 0x80u) == 0u) break;          // 就绪
+        delay(1);
+    }
+    if (status & 0x80u) return false;               // 超时仍忙
+
     return get_measure(temperature_c, humidity_percent);
 }
