@@ -145,14 +145,30 @@ void AHT20::start_measure()
 
 bool AHT20::get_measure(float& temperature_c, float& humidity_percent)
 {
-    uint8_t buf[7];
+    uint8_t buf[7] = {0};
+
     iic_start();
-    if (!iic_write_byte(ADDR_R)) { iic_stop(); return false; }
+    if (!iic_write_byte(ADDR_R)) {
+        iic_stop();
+        if (run_fail_cnt_ < RUN_FAIL_LIMIT) run_fail_cnt_++;
+        return false;
+    }
     for (int i = 0; i < 6; i++) buf[i] = iic_read_byte(true);  // ACK
     buf[6] = iic_read_byte(false);                            // NACK
     iic_stop();
 
-    if (buf[0] & 0x80u) return false;     // bit7=1 仍忙
+    uint8_t status = buf[0];
+
+    if (status & STATUS_BUSY_MASK) {     // bit7=1 仍忙
+        if (run_fail_cnt_ < RUN_FAIL_LIMIT) run_fail_cnt_++;
+        return false;
+    }
+
+    // bit3 校准使能：AHT20 正常上电后应为 1，作为存在性指纹
+    if ((status & STATUS_CAL_ENABLE_MASK) == 0u) {
+        if (run_fail_cnt_ < RUN_FAIL_LIMIT) run_fail_cnt_++;
+        return false;
+    }
 
     uint32_t raw_h = ((uint32_t)buf[1] << 12) |
                      ((uint32_t)buf[2] << 4)  |
@@ -164,6 +180,15 @@ bool AHT20::get_measure(float& temperature_c, float& humidity_percent)
     humidity_percent = (float)raw_h / 1048576.0f * 100.0f;
     temperature_c    = (float)raw_t / 1048576.0f * 200.0f - 50.0f;
 
+    // 物理范围校验（AHT20 数据手册范围：温度 -40~85℃，湿度 0~100%）
+    if (humidity_percent < 0.0f || humidity_percent > 100.0f ||
+        temperature_c < -40.0f || temperature_c > 85.0f) {
+        if (run_fail_cnt_ < RUN_FAIL_LIMIT) run_fail_cnt_++;
+        return false;
+    }
+
+    run_fail_cnt_ = 0u;
+
     this->humidity_percent = humidity_percent;
     this->temperature_c    = temperature_c;
     return true;
@@ -171,20 +196,30 @@ bool AHT20::get_measure(float& temperature_c, float& humidity_percent)
 
 bool AHT20::read_blocking(float& temperature_c, float& humidity_percent)
 {
-    online_ = true;   // 上电自检：能通过 0xAC 测量命令即视为检测到 AHT20
+    // 上电自检：多次尝试判定是否存在，避免 SDA 浮空导致单次 ACK 误判
+    for (uint8_t attempt = 0; attempt < PROBE_ATTEMPTS; ++attempt) {
+        start_measure();
 
-    start_measure();
+        // 手册要求：发送测量命令后等待 >=80ms 测量完成。
+        // 先保底 delay(80)，再轮询忙标志（状态字 bit7==0 表示就绪），超时 100ms。
+        delay(80);
+        uint8_t status = 0;
+        bool got_status = false;
+        for (int t = 0; t < 100; t++) {
+            if (!read_status(status)) break;
+            got_status = true;
+            if ((status & STATUS_BUSY_MASK) == 0u) break;          // 就绪
+            delay(1);
+        }
 
-    // 手册要求：发送测量命令后等待 >=80ms 测量完成。
-    // 先保底 delay(80)，再轮询忙标志（状态字 bit7==0 表示就绪），超时 100ms。
-    delay(80);
-    uint8_t status;
-    for (int t = 0; t < 100; t++) {
-        if (!read_status(status)) return false;
-        if ((status & 0x80u) == 0u) break;          // 就绪
-        delay(1);
+        if (got_status && ((status & STATUS_BUSY_MASK) == 0u)) {
+            if (get_measure(temperature_c, humidity_percent)) {
+                online_ = true;
+                return true;
+            }
+        }
     }
-    if (status & 0x80u) return false;               // 超时仍忙
 
-    return get_measure(temperature_c, humidity_percent);
+    online_ = false;
+    return false;
 }

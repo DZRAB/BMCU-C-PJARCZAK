@@ -283,23 +283,28 @@ int main(void)
             }
         }
 
-        // ===== AHT20 环境温湿度（非阻塞，每 2 秒采样一次）=====
+        // ===== AHT20 环境温湿度（非阻塞采样）=====
+        // 在线时 2 秒采样一次；离线后延长至 10 秒尝试恢复，连续 10 次失败则 is_online() 为 false。
         {
             static uint64_t aht20_next_ms  = 0;
             static uint64_t aht20_deadline = 0;
             static bool     aht20_waiting  = false;
 
-            const uint64_t now_ms = time_ms64();
-            if (!aht20_waiting && (now_ms - aht20_next_ms) >= 2000u)
+            const uint64_t now_ms    = time_ms64();
+            const uint64_t period_ms = g_aht20.is_online() ? 2000u : 10000u;
+
+            if (!aht20_waiting && (now_ms - aht20_next_ms) >= period_ms)
             {
                 g_aht20.start_measure();
                 aht20_waiting  = true;
                 aht20_deadline = now_ms + 90u;
+                aht20_next_ms  = now_ms;
             }
             if (aht20_waiting && now_ms >= aht20_deadline)
             {
                 float t = 0.0f, h = 0.0f;
-                if (g_aht20.get_measure(t, h))
+                g_aht20.get_measure(t, h); // 内部更新失败计数；连续 RUN_FAIL_LIMIT 次失败即判离线
+                if (g_aht20.is_online())
                 {
                     for (uint8_t i = 0; i < 4u; i++)
                     {
@@ -308,7 +313,6 @@ int main(void)
                     }
                 }
                 aht20_waiting = false;
-                aht20_next_ms = now_ms;
             }
         }
 

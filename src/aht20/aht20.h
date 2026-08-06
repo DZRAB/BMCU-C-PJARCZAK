@@ -28,12 +28,15 @@ public:
     // 初始化软件 I2C 并启动 AHT20（必须在 time_hw_init() 之后调用）
     void init();
 
-    // 阻塞读取一次（用于初始化自检）
+    // 阻塞读取一次（用于初始化自检，内部多次重试）
     bool read_blocking(float& temperature_c, float& humidity_percent);
 
     // 非阻塞测量：先 start_measure()，延时约 90ms 后 get_measure()
     void start_measure();
     bool get_measure(float& temperature_c, float& humidity_percent);
+
+    // 传感器当前是否在线：上电自检成功 且 运行期未连续失败达到阈值
+    bool is_online() const { return online_ && (run_fail_cnt_ < RUN_FAIL_LIMIT); }
 
     float temperature_c    = 0.0f;  // 最近一次温度 ℃
     float humidity_percent = 0.0f;  // 最近一次湿度 %
@@ -50,7 +53,16 @@ private:
 
     static constexpr uint8_t CMD_MEASURE    = 0xAC;
 
+    // 状态字关键位（见 AHT20 数据手册表 9）
+    static constexpr uint8_t STATUS_BUSY_MASK        = 0x80u;  // bit[7] 忙闲指示
+    static constexpr uint8_t STATUS_CAL_ENABLE_MASK  = 0x08u;  // bit[3] 校准计算使能，上电后应为 1
+    static constexpr uint8_t STATUS_CRC_FLAG_MASK    = 0x10u;  // bit[4] CRC_flag
+
+    static constexpr uint8_t RUN_FAIL_LIMIT = 10u;   // 运行期连续失败阈值，达到则判离线
+    static constexpr uint8_t PROBE_ATTEMPTS = 5u;  // 上电自检最多尝试次数
+
     bool online_ = false;           // 上电自检是否成功检测到 AHT20
+    uint8_t run_fail_cnt_ = 0u;     // 运行期连续失败计数
     static uint32_t g_iic_delay_ticks;
 
     static inline void gpio_hi(GPIO_TypeDef* p, uint16_t pin) { p->BSHR = pin; }
@@ -65,8 +77,7 @@ private:
     bool iic_write_byte(uint8_t b);   // 返回 true=收到 ACK
     uint8_t iic_read_byte(bool ack);  // ack=true 时回 ACK
 
-    // 官方手册：AHT20 上电即就绪，无需任何初始化/软复位命令（无 0xBA/0xE1 等指令）。
-    // 直接返回 true，存在性由 read_blocking() 发 0xAC 测量命令的 ACK 判定。
+    // AHT20 上电即就绪，无需额外初始化命令；存在性由 read_blocking() 做多次判定。
     bool sensor_init();
     bool read_status(uint8_t& status);
 };
