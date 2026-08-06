@@ -19,3 +19,6 @@ single_build/
 
 # ===== 发布固件文件夹（不入库，已发布Release页面）=====
 firmwares_Release/
+
+# ===== Python 字节码缓存（运行 .py 脚本自动生成，不入库）=====
+__pycache__/

@@ -16,8 +16,10 @@
 //       最终每个型号的参数需由用户在成品板上实测迭代后填定（无串口，
 //       只能看动作 + RGB 灯判断）。标有 [待实测] 的项即为需要校准的项。
 //
-// 本文件只在定义了 BMCU_TPU_MODEL 时被包含；未定义时整个 v4.0 TPU 逻辑
-// 不编译，固件行为与 v3.2 完全一致（零差异）。
+// 本文件无条件编译进固件：通用固件默认内置 TPU 逻辑，不再有"专用固件"概念。
+// 各通道运行时型号由编译期写死表 TPU_FIXED_ID[4] 决定（见文件末尾），
+// 仅当打印机将该通道设为 TPU for AMS（GFU98, filament_type==tpu）时生效；
+// 设 PLA/PETG 等非 TPU 走正常刚性逻辑，写死表不参与。回传仍用 GFU98 不骗打印机。
 // ============================================================================
 
 #pragma once
@@ -25,10 +27,9 @@
 #include <cstdint>
 
 // ============================================================================
-// 注意：自 v4.0-tpu 起，参数表与 tpu_param_lookup() 始终编译进固件（无条件），
-// 以支撑"通用固件 + 运行时按通道识别 TPU"的主流场景。只有当需要"专用固件"
-// （编译期强制某型号、供不支持下发材料型号的打印机使用）时才需定义 BMCU_TPU_MODEL。
-// 未定义 BMCU_TPU_MODEL 且运行时无任何通道识别为 TPU 时，固件行为 = v3.2（零差异）。
+// 参数表与 tpu_param_lookup() 始终编译进固件（无条件），支撑"通用固件 +
+// 运行时按通道识别 TPU"的主流场景。各通道编译期写死型号见文件末尾
+// TPU_FIXED_ID[4]（由 BMCU_TPU_FIX0..3 宏决定，未定义时保底全 GFU85）。
 // ============================================================================
 
 // ---- TPU 型号枚举（与 Bambu filament_id 前缀/型号对应）---------------------
@@ -141,21 +142,41 @@ static inline const _tpu_param *tpu_param_lookup(const char *filament_id)
     return &TPU_PARAMS[TPU_PARAMS_N - 1];        // 未知 TPU → 最软默认
 }
 
-// ---- 编译期选定的型号（来自 BMCU_TPU_MODEL 宏，值形如 GFU98）------------
-// 仅用于"专用固件"：构建脚本传入 -D BMCU_TPU_MODEL=GFU98（宏展开为标识符
-// GFU98，非字符串）。用 STRINGIFY 将其转为字符串字面量 "GFU98" 作为 key。
-// 编译时强制以该型号参数运行（解决"打印机不支持 TPU 设置"的场景），
-// 同时运行时仍读取 bambubus_filament_id 用于 RGB/兼容（见 bambu_bus_ams.cpp）。
-// 未定义 BMCU_TPU_MODEL 时（通用固件默认），下方接口不存在，on_use 闭环改为
-// 运行时按通道 filament_type 识别 TPU 并查表。
-#ifdef BMCU_TPU_MODEL
+// ---- 编译期每通道写死型号表（TPU 4 通道方案）---------------------------
+// 来源：构建脚本传入 BMCU_TPU_FIX0..3（值形如 GFU98 / GFU90 / GFU95 / GFU85）。
+// 未定义某通道宏时保底写死最软最稳的 GFU85，保证任何配置都能跑（不依赖打印机下发）。
+// 仅在打印机将该通道设为 TPU for AMS（filament_type==tpu，即下发 GFU98）时，
+// 内部用本表型号跑 TPU 软料参数；非 TPU（PLA/PETG/...）走刚性，本表不参与。
+// 回传仍用 GFU98，不骗打印机，避免循环触发。
+#ifndef BMCU_TPU_FIX0
+#define BMCU_TPU_FIX0  GFU85
+#endif
+#ifndef BMCU_TPU_FIX1
+#define BMCU_TPU_FIX1  GFU85
+#endif
+#ifndef BMCU_TPU_FIX2
+#define BMCU_TPU_FIX2  GFU85
+#endif
+#ifndef BMCU_TPU_FIX3
+#define BMCU_TPU_FIX3  GFU85
+#endif
+
+// 宏（标识符，如 GFU85）转字符串字面量，作为 tpu_param_lookup 的 key
 #define _TPU_STR1(x)  #x
 #define _TPU_STR(x)   _TPU_STR1(x)
-#define TPU_SELECTED_ID  _TPU_STR(BMCU_TPU_MODEL)
 
-// 编译期选定的 TPU 参数（专供"专用固件"的 on_use 闭环直接使用）
-static inline const _tpu_param *tpu_param_selected(void)
+// 每通道编译期写死型号字符串表（下标 0..3 对应 CH0..CH3）
+static const char *const TPU_FIXED_ID[4] =
 {
-    return tpu_param_lookup(TPU_SELECTED_ID);
+    _TPU_STR(BMCU_TPU_FIX0),
+    _TPU_STR(BMCU_TPU_FIX1),
+    _TPU_STR(BMCU_TPU_FIX2),
+    _TPU_STR(BMCU_TPU_FIX3),
+};
+
+// 取通道 ch(0..3) 的写死型号参数指针（供 on_use 闭环与 RGB 识别色使用）
+static inline const _tpu_param *tpu_param_fixed(uint8_t ch)
+{
+    if (ch >= 4) ch = 3;
+    return tpu_param_lookup(TPU_FIXED_ID[ch]);
 }
-#endif // BMCU_TPU_MODEL

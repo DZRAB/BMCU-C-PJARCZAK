@@ -75,12 +75,12 @@
   - **编译**：方法见 [`编译指南.md`](./docs/编译指南.md)；预编译固件由 **GitHub Releases** 发布。
 
 ### v4.0-tpu 更新说明（开发中 · 分支 `dev/v4.0-tpu`）
-- **新增 TPU 软料专用送料模式**：BMCU 原本的 on_use 送料闭环假设料是"刚性、低摩擦、可压缩性小"的（PLA/PETG 接近），对 TPU 这类高弹性、高摩擦、易堆料的软料支持不佳（缓冲头压力判定失真、误报堵料、啃料）。v4.0 针对 TPU 提供**按型号独立调参的送料参数表**。
-- **材质识别（运行时）**：固件已能从打印机下发的 `bambubus_filament_id`（Bambu filament_id，如 `GFU98`）解析材质类型，用于 RGB 显示与日志。编码规则（`GFU**`=TPU 等）来自 Bambu Studio 源码，与打印机固件表一致。
-- **编译期选定 TPU 型号（解决"打印机不支持 TPU 设置"场景）**：由于成品板无串口、且部分打印机/AMS 无法设置 TPU 耗材，v4.0 设计为**编译时指定 TPU 型号**，生成"TPU 专用固件"——该固件强制以该型号的软料参数运行，不依赖运行时材质下发。
-  - 新增编译宏 `BMCU_TPU_MODEL`（值如 `GFU98`/`GFU90`/`GFU85`），仅在该宏定义时 TPU 逻辑编译进固件；**未定义时行为与 v3.2 完全一致（零差异）**。
+- **新增 TPU 软料专用送料模式**：BMCU 原本的 on_use 送料闭环假设料是"刚性、低摩擦、可压缩性小"的（PLA/PETG 接近），对 TPU 这类高弹性、高摩擦、易堆料的软料支持不佳（缓冲头压力判定失真、误报堵料、啃料）。v4.0 针对 TPU 提供**按型号独立调参的送料参数表**，所有固件都内置此逻辑（无编译开关隔离，未设 TPU 的通道行为与 v3.2 完全一致）。
+- **材质识别（运行时）**：固件能从打印机下发的 `bambubus_filament_id`（Bambu filament_id，如 `GFU98`）解析材质类型，用于 RGB 显示与日志。编码规则（`GFU**`=TPU 等）来自 Bambu Studio 源码，与打印机固件表一致。
+- **编译期 4 通道写死型号表（解决"打印机只允许设 GFU98"场景）**：Bambu 打印机只允许设置 TPU for AMS（`GFU98`），其它 TPU 型号（95A/90A/85A 等）被拒，BMCU 收不到对应 `filament_id`、TPU 参数不生效。v4.0 在编译时用 4 个宏 `BMCU_TPU_FIX0~3` 给槽 0~3 **分别写死型号**（缺省全 `GFU85` 最稳）；运行时某通道被设为 `GFU98` 时，固件**忽略下发的 `GFU98`、内部用写死型号跑软料参数**，回传仍是 `GFU98`（不骗打印机、循环不触发）。非 TPU（PLA/PETG 等）走刚性逻辑、写死表不参与。
   - 覆盖的送料旋钮：on_use 目标缓冲头压力带、三段式（推/等/报堵）时间窗与力度上限、回抽弹性补偿。每个 Bambu TPU 型号（GFU98/GFU00/GFU02/GFU95/GFU90/GFU85）一套独立参数，按 Shore 硬度分级，初值待实测校准。
-  - **TPU 固件独立成产品线**：`build_one.sh` 第 7 参数传型号、`build_all_firmwares_fast.py` 设环境变量 `BMCU_TPU_MODEL` 时，产物输出到独立的 `firmwares-tpu/`（或 `single_build/TPU_<型号>/`）目录，**绝不混入常规 `firmwares/` 矩阵**，不影响 v3.2 稳定发布。
+  - **不新增固件变体**：写死型号表并入现有编译变体，固件数量不变（仍 972 / 1884），只是每个固件内置 4 通道写死表；`build_one.sh` 第 7~10 参数传型号、`build_all_firmwares_fast.py` 设环境变量 `BMCU_TPU_FIX0~3`。
+- **RGB 灯显示内部真实写死型号**：关掉"耗材颜色显示"后，通道灯按 BMCU **实际跑的写死型号**点色（如写死 90A 显示橙），肉眼知内部实际型号；非 TPU 统一白偏蓝。详见 [`rgb_led_meaning.md`](./docs/rgb_led_meaning.md) 第 2.2 节。
 - **版本号**：上报号保持 `10.50.00.00` 不变（兼容打印机），本仓库版本更迭用 git 标签区分（如 `v4.0-tpu`）。
 - **代码位置**：参数表 [`src/tpu_params.h`](./src/tpu_params.h)，材质解析 [`src/bambu_bus_ams.cpp`](./src/bambu_bus_ams.cpp)，送料闭环接入 [`src/Motion_control.cpp`](./src/Motion_control.cpp)。
 - **编译**：见 [`编译指南.md`](./docs/编译指南.md)。

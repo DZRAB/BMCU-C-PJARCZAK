@@ -1156,7 +1156,7 @@ void get_package_set_filament(unsigned char *buf, int length)
     _ams *ams_ptr = ams + bambubus_ams_map[fixed_ams_num];
     memcpy(ams_ptr->filament[read_num].bambubus_filament_id, buf + 7, sizeof(ams_ptr->filament[read_num].bambubus_filament_id));
     ams_ptr->filament[read_num].filament_type = bambubus_filament_id_to_type(ams_ptr->filament[read_num].bambubus_filament_id);
-    ams_ptr->filament[read_num].tpu_model = tpu_param_lookup(ams_ptr->filament[read_num].bambubus_filament_id)->model; // v4.0-tpu: 记录识别到的 TPU 型号供 RGB 用
+    ams_ptr->filament[read_num].tpu_model = tpu_param_fixed(read_num)->model; // v4.0-tpu: 记录写死表真实型号供 RGB 用（肉眼知内部实际型号）
     ams_ptr->filament[read_num].color_R = buf[15];
     ams_ptr->filament[read_num].color_G = buf[16];
     ams_ptr->filament[read_num].color_B = buf[17];
@@ -1189,7 +1189,7 @@ void get_package_set_filament_type2(unsigned char *buf, int length)
            printer_data_long.datas + 2,
            sizeof(ams_ptr->filament[read_num].bambubus_filament_id));
     ams_ptr->filament[read_num].filament_type = bambubus_filament_id_to_type(ams_ptr->filament[read_num].bambubus_filament_id);
-    ams_ptr->filament[read_num].tpu_model = tpu_param_lookup(ams_ptr->filament[read_num].bambubus_filament_id)->model; // v4.0-tpu: 记录识别到的 TPU 型号供 RGB 用
+    ams_ptr->filament[read_num].tpu_model = tpu_param_fixed(read_num)->model; // v4.0-tpu: 记录写死表真实型号供 RGB 用（肉眼知内部实际型号）
 
     ams_ptr->filament[read_num].color_R = printer_data_long.datas[10];
     ams_ptr->filament[read_num].color_G = printer_data_long.datas[11];

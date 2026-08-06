@@ -1543,22 +1543,19 @@ public:
                 const float pct = MC_PULL_pct_f[CHx];
 
                 // v4.0-tpu: 决定当前通道 CHx 使用的 TPU 参数指针。
-                //  - 专用固件（定义了 BMCU_TPU_MODEL）：所有通道强制用编译期型号参数。
-                //  - 通用固件（默认）：仅当该通道运行时识别为 TPU 才查表；
-                //    其他通道（PLA/PETG/...）tpu_p 为 nullptr，走原刚性常量，
-                //    行为与 v3.2 完全一致（零差异）。
+                // 通用固件内置 TPU 逻辑：仅当该通道运行时识别为 TPU（即打印机设成
+                // TPU for AMS / 下发 GFU98, filament_type==tpu）时，忽略下发的 GFU98，
+                // 改用编译期写死表 TPU_FIXED_ID[CHx] 的真实型号参数跑。
+                // 设 PLA/PETG/... 等非 TPU：tpu_p 为 nullptr，走原刚性常量，
+                // 行为与 v3.2 完全一致（零差异）。写死表由 BMCU_TPU_FIX0..3 决定，
+                // 缺省全 GFU85（最软最稳）。
                 const _tpu_param *tpu_p = nullptr;
                 tpu_p_run = nullptr;
-#ifdef BMCU_TPU_MODEL
-                tpu_p = tpu_param_selected();
-                tpu_p_run = tpu_p;
-#else
                 if (ams[motion_control_ams_num].filament[CHx].filament_type == _filament_type::tpu)
                 {
-                    tpu_p = tpu_param_lookup(ams[motion_control_ams_num].filament[CHx].bambubus_filament_id);
+                    tpu_p = tpu_param_fixed((uint8_t)CHx);
                     tpu_p_run = tpu_p;
                 }
-#endif
 
                 // 送料目标带：默认取通用(刚性料)常量；TPU 通道用对应型号参数。
                 float target_pct = tpu_p ? tpu_p->on_use_target_pct : MC_ON_USE_TARGET_PCT;

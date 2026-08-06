@@ -318,7 +318,7 @@ NVM 位于 Flash 末 **4KB 扇区**（`0x0800F000`，CH32V203C8 结束于 `0x080
 
 ## 11. 调试与排错提示
 
-- 系统灯（SYS_RGB，主板上单独一颗，非通道灯）：正常心跳时浅灰（`0x38,0x35,0x32`，基色）；总线错误时红色（`0x10,0,0`，基色）。v4.0 在其上叠加 AHT20 呼吸提示：AHT20 本周期成功采样一次 → 浅灰基色上呼吸式混入紫色（`0x60,0,0x80`，约 1s 三角波渐变回基色）；连续 3 次读取失败 → 混入琥珀色（`0xFF,0x60,0`）提示。呼吸提示是瞬态、不覆盖基色，且仅在通讯正常（白基色）时叠加，通讯失败（红）时不闪紫/琥珀，避免混淆。详见第 13.10 节。
+- 系统灯（SYS_RGB，主板上单独一颗，非通道灯）：只显示 BMCU 与打印机的通讯心跳——正常时浅灰白（`0x38,0x35,0x32`）；有 AHT20 时每 3 秒闪一下（约 150ms，防灯珠烤温）；总线错误时红色（`0x10,0,0`）常亮。AHT20 事件**不在系统灯上显示**。详见第 13.10 节与 `docs/rgb_led_meaning.md` 第 1 节。
 - 打印机启动会报 **HMS 警告**（来自 `0x20` 心跳握手），属已知可接受行为，不阻断打印。
 - 首次刷写必须**所有通道为空**；否则取出 filament 后按住 buffer 约 5s 重新校准。
 
@@ -420,19 +420,19 @@ AHT20 在板子上离 SYS_RGB 灯珠很近，灯一直亮白光会发热，把 A
 
 > 本章集中记录 3.0/3.1/3.2 三个标签的**改动动机、根因分析、具体代码改动点**，供回溯。代码行号/符号以各标签对应提交为准；功能面描述见 README「版本说明」。
 
-### 12.1 v3.0-autoretract：双开关自动回抽（S2 判定料根）
+### 13.1 v3.0-autoretract：双开关自动回抽（S2 判定料根）
 
 - **新增能力**：双微动开关板（S1=进料口、S2=挤出机后）在回抽时不再依赖编译期固定的 `AMS_RETRACT_LEN`，改用 **S2 释放** 自动判定料根位置，自动决定回抽距离。
 - **关键宏**：`BMCU_DM_AUTO_RETRACT`（默认随 `BMCU_DM_TWO_MICROSWITCH` 派生；双开关=1、单开关=0）。关闭则双开关也走固定回抽长度（需编译全长度矩阵），见第 6.3 节说明。
 - **代码位置**：`Motion_control.cpp` 中 `dm_autoretract_phase_enum`、`dm_ar_phase[]`、`dm_ar_finish_pullback` lambda；自检用 `dm_key_raw[]`（原始开关状态，不含手势覆盖）、`dm_ar_freeze_report[]`（冻结对打印机上报）。
 - **原理**：退料期间冻结 MC_ONLINE 上报避免 S2 跳变误触发打印机；以 `ks`（由 `dm_key_to_state()` 解码）判料根；`AMS_RETRACT_LEN(=2.00f)` 退化为安全上限兜底。
 
-### 12.2 v3.1-autoretract：修复双开关自动回抽退料后不自动送料
+### 13.2 v3.1-autoretract：修复双开关自动回抽退料后不自动送料
 
-#### 现象
+#### 13.2.1 现象
 v3.0 双开关自动回抽退完料后，不会自动向前送料就位，需用户手动干预。
 
-#### 根因（读代码确认）
+#### 13.2.2 根因（读代码确认）
 BMCU 370C 机构中 **S1（进料口微动开关）永远被 BMG 滚轮压住**，`ks` 的物理真实取值只能是：
 - `1` = 两开关都按（both，S1+S2，≈1.8V）
 - `2` = 仅 S1 按下（≈1.5V，即 S2 已释放）
@@ -445,7 +445,7 @@ v3.0 的回抽状态机有两段：
 
 由于 `ks` 到不了 `0`，第 1 段靠 `d >= safety_max` 兜底退出，第 2 段则靠 200 周期超时退出；退出后 `dm_autoload_gate` 仍保持置位（`dm_auto` 的 Stage1 `S1_DEBOUNCE` 仅在 `ks==0 + idle` 时复位），导致 `dm_auto` 自动装载流程被永久挡住 → **退完不自动送料**。
 
-#### 改动清单（`Motion_control.cpp` + `bambu_bus_ams.cpp`）
+#### 13.2.3 改动清单（`Motion_control.cpp` + `bambu_bus_ams.cpp`）
 - 删除 `AR_RESEAT_WAIT_S1S2` 阶段及相关变量 `AR_RESEAT_MAX_M`、`dm_ar_reseat_start_m[]`、`dm_ar_reseat_cycles[]`；枚举仅保留 `AR_IDLE`、`AR_RETRACT_WAIT_S2`。
 - 退料判定改为 **SW2 释放即停**：`const bool sw2_released = (ks == 2u);` 命中即 `dm_ar_finish_pullback()`；删除等待 `ks==0` 分支。
 - `dm_key_to_state()` 阈值重标定（与实际机构电压对应）：
@@ -458,16 +458,16 @@ v3.0 的回抽状态机有两段：
 - 注释同步更新（原注释写的"退到 S2 释放再正推至 S2 再按下定位"与机构事实不符，已改为"退到 SW2 释放即停，然后交 dm_auto 送 12cm"）。
 - `bambu_bus_ams.cpp` 附属改动：`long_packge_version_version_and_name_AMS08[]` 的型号名字段由 `AMS08`（0x41,0x4D,0x53,0x30,0x38）改为 `N3F05`（0x4E,0x33,0x46,0x30,0x35）——为让 Bambu Studio 显示温湿度数值（此改动在 v3.2 被回退，见 13.3「上报版本名回退」）。
 
-#### 验证点
+#### 13.2.4 验证点
 - 双开关板退料后无需手动干预即自动送料就位；
 - 单开关板（`BMCU_DM_AUTO_RETRACT=0`）走固定长度，不受影响；
 - `AMS_RETRACT_LEN` 仍作为安全上限兜底防卡死。
 
-### 12.3 v3.2-fix105：仅修 bug（不丢 3.1 功能）
+### 13.3 v3.2-fix105：仅修 bug（不丢 3.1 功能）
 
 > 分支 `bugfix/v3.2-fix105`，基于 `v3.1-autoretract`。**仅修两个遗留 bug，功能/上报号 `10.50` 完全不变**。具体功能面说明见 README。
 
-#### Bug1：手动暂停 / 停止时 BMCU 不停
+#### 13.3.1 Bug1：手动暂停 / 停止时 BMCU 不停
 
 **现象**：打印机发来暂停或停止指令时，若 BMCU 正处于"自己送料"状态（自动回抽后的 `send_out` 送料，或 DM 自动装载 `dm_auto` 送料），会无视停止指令继续转动，直到自己送完才停。
 
@@ -491,7 +491,7 @@ v3.0 的回抽状态机有两段：
 
 **效果**：打印机一发暂停/停止（或通道掉线），BMCU 若在 `send_out` 或 `dm_auto` 送料，立即退出并停机；正常 `on_use`/`before_on_use` 的停止逻辑保持不变。
 
-#### Bug2：进料电机缓冲顶满误报堵料 → 黄灯三步法
+#### 13.3.2 Bug2：进料电机缓冲顶满误报堵料 → 黄灯三步法
 
 **现象**：料过五通（4 管汇 1）或到挤出机入口时，缓冲头被顶到"满"位。原版此时一直用大力死命硬推（PWM cap 最高 950），要么空转啃料、要么误报"堵料"红灯停机；真堵了又可能判断不及时。
 
@@ -511,10 +511,10 @@ v3.0 的回抽状态机有两段：
 
 **效果对照**：送料遇五通阻力、缓冲头顶满时亮**黄灯**（保护避让）；仅真堵亮**红灯**。LED 语义见 `docs/rgb_led_meaning.md`。
 
-#### 上报版本名回退（AMS08）
+#### 13.3.3 上报版本名回退（AMS08）
 v3.2 将 `bambu_bus_ams.cpp` 中 `long_packge_version_version_and_name_AMS08[]` 的型号名字段由 v3.1 的 `N3F05`（0x4E,0x33,0x46,0x30,0x35）**改回 `AMS08`**（0x41,0x4D,0x53,0x30,0x38）。原因：`N3F05` 虽能让 Studio 显示温湿度数值，但实测运行两次即被打印机拉黑；`AMS08` 不显示具体数值但稳定不被拉黑。上报号仍保持 `10.50`。如需 `N3F05` 显示数值方案，需另行解决被拉黑问题（不在本版本范围）。
 
-#### 编译/验证
+#### 13.3.4 编译/验证
 - 三种型号实编通过：双开关 DM=1（Flash ≈84.9%）、单开关 DM=0（≈80.2%）、双开关固定长度。
 - `build_one.sh` 在 v3.2 修复了单开关 `AUTOLOAD=0` 时 `RETRACT` 被误覆盖为 `2.00_auto` 的脚本 bug（现单开关保留用户指定回抽长度）。
 
@@ -529,7 +529,7 @@ v3.2 将 `bambu_bus_ams.cpp` 中 `long_packge_version_version_and_name_AMS08[]` 
 > 本章记录 `dev/v4.0-tpu` 分支针对 TPU 软料送料所做的开发细节。用户视角见
 > [`docs_release/v4.0-tpu发布说明.md`](./docs_release/v4.0-tpu发布说明.md)。
 
-### 13.1 背景与设计动机
+### 14.1 背景与设计动机
 
 BMCU 的 on_use 送料闭环（见第 6 章）原本假设料是「刚性、低摩擦、可压缩性小」的（PLA/PETG 接近）。
 对 TPU 这类**高弹性、高摩擦、易堆料**的软料，原闭环会出问题：
@@ -538,25 +538,25 @@ BMCU 的 on_use 送料闭环（见第 6 章）原本假设料是「刚性、低�
 - 推力过大啃料/堆料，过小送不动；
 - 固定长度回抽后 TPU 回弹，实际送料量不足。
 
-**核心决策：双轨固件**
+**核心决策：单一通用固件 + 编译期 4 通道写死型号表**
 
-1. **通用固件（默认全量产出，推荐）**
-   - 编译时**不需要**指定 TPU 型号。
-   - 装料后打印机会把**当前通道材料型号**下发给 BMCU；BMCU 读到某通道是 TPU（如 `GFU90`）
-     后，**只对那个通道切换成对应 TPU 型号的软料推力参数**，其他通道（PLA/PETG…）仍走原 v3.2 刚性推力。
+所有固件都**无条件内置 TPU 逻辑**（参数表与查表函数不再用 `#ifdef` 隔离），没有"通用/专用"双轨之分。TPU 优化只在某通道被设为 TPU 时触发，其它通道零差异。
+
+1. **TPU 逻辑何时触发**
+   - 装料后打印机会把**当前通道材料型号**下发给 BMCU；BMCU 读到某通道 `filament_type == tpu`（即打印机允许设置的 TPU for AMS `GFU98`）后，切换成 TPU 软料推力参数，其他通道（PLA/PETG…）仍走原 v3.2 刚性推力。
    - 打印过程不改材料，直到更换/重设材料才更新该通道参数。
    - 任何通道都不设 TPU 时，固件行为 = 原版 v3.2，**零差异**（参数表虽编入固件，但未被任何通道触发）。
 
-2. **专用固件（兜底，仅老打印机用）**
-   - 部分老打印机/AMS 无法下发或识别 TPU 耗材型号，BMCU 无从运行时识别。
-   - 编译时选定一个 TPU 型号（`BMCU_TPU_MODEL=GFU90`），单独生成专用固件刷入，
-     **所有通道强制按该型号参数送料**，不依赖打印机下发。
-   - 适用「整台只打 TPU、且打印机不支持材料设置」的妥协场景。
+2. **写死型号表解决「打印机只能设 GFU98」**
+   - Bambu 打印机只允许设置 TPU for AMS（`GFU98`），其它 TPU 型号（95A/90A/85A 等）被拒，BMCU 收不到对应 `filament_id`，TPU 参数不生效。
+   - 编译期用 4 个宏 `BMCU_TPU_FIX0~3` 给槽 0~3 **分别写死一个型号**（如 `SLOT0=GFU98 SLOT1=GFU90 SLOT2=GFU95 SLOT3=GFU85`），不指定时保底全写 `GFU85`（最软最稳）。
+   - 运行时：某通道被设为 `GFU98` 时，固件**忽略下发的 `GFU98`，内部用该通道写死型号跑软料参数**；回传仍是 `GFU98`，不骗打印机，循环不触发（本方案核心优点）。
+   - 非 TPU（PLA/PETG/ABS/PA/other）走刚性逻辑，**写死表不参与**。
 
 最常用场景：**一个通道放 TPU、其他通道放 PLA 做支撑**（如 TPU 壳体 + PLA 支撑）。
-一块通用固件通吃，哪个槽放 TPU 哪个槽自动优化。
+一块固件通吃，哪个槽放 TPU 哪个槽自动优化；想用非 GFU98 型号时靠编译写死表绕开打印机限制。
 
-### 13.2 送料逻辑详解：不同耗材各自怎么推（重点）
+### 14.2 送料逻辑详解：不同耗材各自怎么推（重点）
 
 **核心结论：不是两套算法，是同一套 on_use 闭环，按通道加载不同参数集。**
 
@@ -566,10 +566,10 @@ BMCU 在 `Motion_control::run(CHx)` 里**逐通道独立**处理。每个通道�
 - **PLA / PETG / ABS / PA 等刚性料**（非 TPU）：`tpu_p == nullptr`，全部走原 v3.2 常量
   （目标压力带 `MC_ON_USE_TARGET_PCT` 约52-65%、PWM 上限 `MC_LOAD_S2_PWM_HI` 约480-550、
   `MC_LOAD_S2_PWM_LO=1000`、三段时间窗避让 `jam_ms=5000`）。
-- **TPU 通道**（运行时 `filament[CHx].filament_type == tpu`）：`tpu_p = tpu_param_lookup(filament[CHx].bambubus_filament_id)`
-  按该型号加载软料参数（如 GFU90：目标带降到 `40-50%`、PWM 上限降到 `360/850`、
-  三段式避让 `phase1=3000 / phase2=5000 / jam=8000`、回抽多退 `0.03m`）。
-- **专用固件**（`BMCU_TPU_MODEL` 定义）：`tpu_p = tpu_param_selected()`，所有通道强制用编译期锁定型号。
+- **TPU 通道**（运行时 `filament[CHx].filament_type == tpu`，即打印机设为 `GFU98`）：`tpu_p = tpu_param_fixed(CHx)`
+  按**该通道写死型号** `TPU_FIXED_ID[CHx]` 加载软料参数（如槽 1 写死 GFU90：目标带降到 `40-50%`、PWM 上限降到 `360/850`、
+  三段式避让 `phase1=3000 / phase2=5000 / jam=8000`、回抽多退 `0.03m`）。下发的 `GFU98` 被忽略，内部用写死型号跑。
+- **非 TPU 通道**（PLA/PETG/ABS/PA/other）：`tpu_p == nullptr`，走原 v3.2 刚性常量，写死表不参与。
 
 **同一时刻多通道举例**（A 槽 TPU + B 槽 PLA 做支撑）：
 BMCU 在 `run(A)` 时 A 通道加载软料参数（降推力、宽避让、多退料），
@@ -619,7 +619,7 @@ TPU 软、弹性大，缓冲头确实比硬料更难被硬顶满；但这不意�
 易被误判堵，故 `jam_ms` 放宽到 9000（PLA 5000，见表 B）给更长容忍窗口。即：软料"顶不满"
 由常态降级推力解决，"假顶满"由放宽 jam 阈值解决，两者都不依赖三段式硬推。
 
-### 13.3 分支与约束（实现前提）
+### 14.3 分支与约束（实现前提）
 
 | 项 | 约束 |
 |---|---|
@@ -629,7 +629,7 @@ TPU 软、弹性大，缓冲头确实比硬料更难被硬顶满；但这不意�
 | `version` 文件 | 保持 `10.50.00.00`，不动（版本靠 git 标签区分） |
 | `platformio.ini` | 原版脚本，**绝对不动**；所有变体通过构建脚本注入宏实现 |
 
-### 13.4 改动清单
+### 14.4 改动清单
 
 **新增 `src/tpu_params.h`（TPU 送料参数表）**
 - `_tpu_model` 枚举：按 Bambu filament_id 前缀/型号对应（GFU98/GFU00/GFU02/GFU95/GFU90/GFU85）。
@@ -650,13 +650,14 @@ TPU 软、弹性大，缓冲头确实比硬料更难被硬顶满；但这不意�
 - `_tpu_param` 结构体：每个型号的完整送料参数。
 - `TPU_PARAMS[]`：参数表（按硬度分级，初值待实测校准）。每个型号额外带一组 `rgb_r/g/b` 识别纯色
   （见下表，亮度与普通状态色同档，不刺眼）。
-- `tpu_param_lookup(const char *filament_id)`：**运行时**按 filament_id 前 4 字符查表；
+- `tpu_param_lookup(const char *filament_id)`：按 filament_id 前 4 字符查表；
   找不到返回最软项（TPU_85A），保证「未知 TPU 也走最保守参数」。
-- `tpu_model_rgb(_tpu_model, r, g, b)`：查表返回某型号的 RGB 识别色（供 RGB 模块调用）。
+- `tpu_param_fixed(uint8_t ch)`：**按通道写死型号查表**，返回 `TPU_FIXED_ID[ch]` 对应的参数指针（供 TPU 通道调用）。
+- `tpu_model_rgb(_tpu_model, r, g, b)`：查表返回某型号的 RGB 识别色（供 RGB 模块调用，显示**写死的真实型号色**）。
 - `TPU_NON_TPU_RGB_R/G/B`：宏关闭时**非 TPU** 材质（PLA/PETG/ABS/PA/未知/other）的统一显示色（白偏蓝）。
-- `TPU_SELECTED_ID` / `tpu_param_selected()`：**仅**在 `BMCU_TPU_MODEL` 定义时存在，供专用固件编译期锁定型号。
-- 关键改动：参数表与 `tpu_param_lookup()` 从 `#ifdef BMCU_TPU_MODEL` 内**移出**，改为无条件编译进固件，
-  使通用固件在运行时也能查表（否则无法「按通道识别 TPU」）。
+- `TPU_FIXED_ID[4]`：编译期 4 通道写死型号表，由 `BMCU_TPU_FIX0~3` 宏注入（未定义时默认全 `GFU85`）。
+- 关键改动：参数表与 `tpu_param_lookup()` **无条件编译进固件**（不再用 `#ifdef BMCU_TPU_MODEL` 隔离），
+  使每个固件都内置 TPU 逻辑；运行时 TPU 通道改用 `tpu_param_fixed(CHx)` 走写死型号。
 
 **修改 `src/ams.h`**
 - 新增 `_filament_type` 枚举：`unknown / pla / petg / abs / pa / tpu / other`。
@@ -664,22 +665,21 @@ TPU 软、弹性大，缓冲头确实比硬料更难被硬顶满；但这不意�
 - `_filament` 结构体新增 `tpu_model` 字段（`_tpu_model`，默认 `UNKNOWN`）：识别到 TPU 时记录具体型号，供 RGB 识别色使用。
 
 **修改 `src/bambu_bus_ams.cpp`**
-- 新增 `bambubus_filament_id_to_type()`：把 Bambu filament_id（如 `GFU90`）映射到 `_filament_type::tpu`。
-- 在两处材料下发回调（`set_filament`、`set_filament_type2`）写入 `filament[ch].filament_type`，
-  并同时写入 `filament[ch].tpu_model = tpu_param_lookup(id)->model`。
-  这正是「装料下发 → 识别材料 → 设置该通道推力」的触发点，也为 RGB 识别色提供型号来源。
+- 新增 `bambubus_filament_id_to_type()`：把 Bambu filament_id（如 `GFU98`）映射到 `_filament_type::tpu`。
+- 在两处材料下发回调（`set_filament`、`set_filament_type2`）写入 `filament[ch].filament_type`；
+  若为 TPU，则把 `filament[ch].tpu_model` 设为**该通道写死型号** `tpu_param_fixed(ch)->model`（忽略下发的 `GFU98`）。
+  这正是「装料下发 → 识别 TPU → 走写死型号参数」的触发点，也为 RGB 识别色提供**真实内部型号**来源。
 
 **修改 `src/Motion_control.cpp`（on_use 闭环接入 TPU 参数）**
 - `MC_PULL_ONLINE_RGB_set` 调用处（`run()` 内 RGB 刷新分支）新增 v4.0-tpu 识别色逻辑：
   - 宏 `BMCU_ONLINE_LED_FILAMENT_RGB` **开启**：行为不变，按打印机下发真实耗材色显示。
-  - 宏 **关闭**：不再只显示微弱橙状态色，而是按通道识别结果点亮，用于**肉眼验证「程序是否真的识别到 TPU」**：
-    - `filament_type == tpu` → 显示该通道 `tpu_model` 对应的专属纯色（一眼区分是哪种 TPU）；
+  - 宏 **关闭**：不再显示微弱橙状态色，而是按通道**真实内部型号**点亮，用于**肉眼验证「程序实际用哪个型号送料」**：
+    - `filament_type == tpu` → 显示该通道**写死型号** `tpu_model` 对应的专属纯色（一眼区分是哪种 TPU）；
     - 非 TPU（PLA/PETG/ABS/PA/未知/other）→ 统一显示 `TPU_NON_TPU_RGB_*` 一种颜色，便于与 TPU 区分。
   - 识别色走与普通状态色同级的亮度档（不经过下发色 gamma 通道），不刺眼。
 - `run()` 的 on_use 段新增按通道决策（见 13.2）：
-  - 专用固件（`BMCU_TPU_MODEL` 定义）：`tpu_p = tpu_param_selected()`，所有通道强制用编译期型号。
-  - 通用固件：`if (filament[CHx].filament_type == tpu) tpu_p = tpu_param_lookup(filament[CHx].bambubus_filament_id);`
-    否则 `tpu_p == nullptr`，走原 v3.2 常量。
+  - `if (filament[CHx].filament_type == tpu) tpu_p = tpu_param_fixed(CHx);` 用该通道写死型号；
+  - 否则 `tpu_p == nullptr`，走原 v3.2 常量。
 - 接入的全部参数字段：
   - `on_use_target_pct` / `on_use_band_hi`：目标压力带。
   - `feed_pwm_hi` / `feed_pwm_lo`：on_use 主路 PWM 推力上限，TPU 降级防过推/啃料。
@@ -688,26 +688,21 @@ TPU 软、弹性大，缓冲头确实比硬料更难被硬顶满；但这不意�
   - `pull_comp_m`：固定长度回抽时 TPU 通道额外多退的补偿长度（解决回弹送料不足）。
 
 **修改 `build_one.sh`（单编脚本）**
-- 第 7 参数 `TPU_MODEL`：`TPU_MODEL=GFU90 bash build_one.sh ...` 编译专用固件。
-- 通过 `PLATFORMIO_BUILD_FLAGS="-DBMCU_TPU_MODEL=${TPU_MODEL}"` 注入（不改 `platformio.ini`）。
-- TPU 模式忽略 `MODE` 推力参数，固定标准推力基准（P1S=0, SOFT_LOAD=0），目录层用型号名顶替原模式层
-  （如 `single_build/TPU_GFU90/GFU90/...`，不再有 `standard(A1)/high_force_load(P1S)/soft_load(A1)` 三套）。
-- 选型指南复制逻辑加 `tpu_dir` 前缀，避免生成错位重复文件夹。
+- 第 7~10 参数 `TPU0~TPU3`：分别指定槽 0~3 的写死型号（如 `bash build_one.sh ... GFU98 GFU90 GFU95 GFU85`），缺省 `GFU85`。
+- 通过 `PLATFORMIO_BUILD_FLAGS="-DBMCU_TPU_FIX0=.. -DBMCU_TPU_FIX1=.. -DBMCU_TPU_FIX2=.. -DBMCU_TPU_FIX3=.."` 注入（不改 `platformio.ini`）。
+- 写死型号表并入现有变体编译，**不新增变体维度**（固件数量不变），只是每个固件内置 4 通道写死表。
 
 **修改 `build_all_firmwares_fast.py`（全量快速编译）**
-- 顶部读取 `BMCU_TPU_MODEL` / `TPU_OUT_DIR` 环境变量。
-- `scan_macros` 额外扫描 `BMCU_TPU_MODEL`（仅用于源文件分类，不影响 flags 注入）。
-- TPU 分支：INVARIANT 源直接复用常规已编译的不变 `.o`（不重编），仅 OTHER/RETRACT 中引用 TPU 宏的源重编。
-- TPU 模式 `MODES` 只取标准推力一项（型号名顶替模式层），全量从 972 降到 **324** 个。
-- TPU 链接产物输出到独立的 `firmwares-tpu/{型号}/...`，不污染常规 `firmwares/` 矩阵。
-- TPU 模式跳过常规 `firmwares/` 写盘（避免混入型号目录）。
-- 基础链接与 TPU 基础链接的 worker 加**失败重试（最多 2 次）**，消除并发链接偶发竞争导致的整批失败。
+- 顶部读取环境变量 `BMCU_TPU_FIX0~3`（缺省 `GFU85`）。
+- 写死型号宏 `BMCU_TPU_FIX0~3` **无条件追加**进所有变体的 `defs`，不读 `BMCU_TPU_MODEL`、不再有 TPU 隔离分支、不再有 `firmwares-tpu` 目录。
+- 全量仍为 972 / 1884 个（固件数不增），每个固件都带 4 通道写死表。
+- 基础链接的 worker 加**失败重试（最多 2 次）**，消除并发链接偶发竞争导致的整批失败。
 
 **修改 `clean_build.sh` / `.gitignore`**
-- `clean_build.sh` 的 `DIRS` 增加 `firmwares-tpu` `firmwares_Release`。
-- `.gitignore` 忽略 `firmwares-tpu/`（固件产出与编译产物不入库，发布页自行发布）。
+- `clean_build.sh` 的 `DIRS` 含 `firmwares` `firmwares_Release`（写死型号不新增目录，无需单独清理）。
+- `.gitignore` 忽略 `firmwares/`（固件产出与编译产物不入库，发布页自行发布）。
 
-### 13.5 三段式堵料避让逻辑（v4.0 参数化）
+### 14.5 三段式堵料避让逻辑（v4.0 参数化）
 
 **澄清：三段时间窗本身不是 v4.0 原创，v3.2 的 `pressure_ctrl_on_use` 黄灯三步法已经是三段
 （0-2s 中力推、2-5s 轻压保持、≥5s 真堵）。** v4.0 的改动是：把这三段各自的**时间长度与力度上限**
@@ -724,7 +719,7 @@ TPU 软、弹性大，缓冲头确实比硬料更难被硬顶满；但这不意�
 所有时间窗/力度按型号在 `tpu_params.h` 中分级，越软的料窗口越长、力度越小。
 （对比：刚性料沿用 v3.2 的三段 `phase1=2000/phase2=3000/jam=5000`；TPU GFU90 放宽到 `phase1=3000/phase2=5000/jam=8000`。）
 
-### 13.5.1 每个 TPU 型号相对 PLA/PETG 的优化对比
+### 14.5.1 每个 TPU 型号相对 PLA/PETG 的优化对比
 
 TPU 与刚性料（PLA/PETG）的本质差异：高弹性、高摩擦、易堆料。直接套用刚性参数会导致
 缓冲头（pressure）被弹性顶满、误判堵料、甚至硬推啃料。v4.0 对每个型号按**硬度分级**缩放 5 类参数。
@@ -767,7 +762,7 @@ TPU 与刚性料（PLA/PETG）的本质差异：高弹性、高摩擦、易堆�
 > 注意：上表数值均为**基于硬度分级的初值占位**，并非最终校准值。每个型号的最终参数需
 > 在成品板上实测迭代后填定（无串口，只能看动作 + RGB 灯判断）。标 `[待实测]` 的项即为需校准项。
 
-### 13.6 参数表（`src/tpu_params.h` 字段含义）
+### 14.6 参数表（`src/tpu_params.h` 字段含义）
 
 | 字段 | 含义 | 趋势（越软越小/越长） |
 |---|---|---|
@@ -785,21 +780,20 @@ TPU 与刚性料（PLA/PETG）的本质差异：高弹性、高摩擦、易堆�
 当前表内 6 档型号（硬度硬→软）：GFU98(68D) > GFU00/GFU95(95A) > GFU90(90A) > GFU85(85A)。
 **表中数值为初值，标注 `[待实测]` 的需上机校准后再固化。**
 
-### 13.7 运行时数据流
+### 14.7 运行时数据流
 
 ```
 打印机下发材料型号
    └─> bambu_bus_ams.cpp: set_filament / set_filament_type2
          └─> filament[ch].filament_type = tpu (经 bambubus_filament_id_to_type)
                └─> Motion_control::run(CHx) on_use 段
-                     ├─ 通用固件: filament_type==tpu ?
-                     │     tpu_p = tpu_param_lookup(filament[ch].bambubus_filament_id)
+                     ├─ 某通道: filament_type==tpu ? (打印机设为 GFU98)
+                     │     tpu_p = tpu_param_fixed(CHx)  // 用该通道写死型号 TPU_FIXED_ID[CHx]，忽略下发 GFU98
                      │     否则 tpu_p = nullptr (走 v3.2 常量)
-                     └─ 专用固件: tpu_p = tpu_param_selected() (编译期锁定)
                      └─> 用 tpu_p->* 覆盖 on_use 目标带/PWM 上限/避让/回抽补偿
 ```
 
-### 13.8 全量快速编译算法详解（改进点 + TPU 链接稳定性修复）
+### 14.8 全量快速编译算法详解（改进点 + TPU 链接稳定性修复）
 
 **为什么原版慢、我们快**：原版 `build_all_firmwares_softload.sh` 走 `pio run` 逐个固件全量重编，
 972 个固件要几小时。我们的 `build_all_firmwares_fast.py` 用**预编译 + 二进制修补**算法，约 1 分钟：
@@ -807,31 +801,28 @@ TPU 与刚性料（PLA/PETG）的本质差异：高弹性、高摩擦、易堆�
 1. **提取工具链参数（带缓存）**：首次跑一次 `pio run -e moj -v` 抓出 C++/C 编译命令与链接命令，
    存 `.pio_parallel/verbose_cache.*`；之后源文件未变则直接复用，跳过这次 pio 编译（省最多时间）。
 2. **按变体宏分类源文件**：扫描每个用户源引用了哪些变体宏（`BAMBU_BUS_AMS_NUM`、`AMS_RETRACT_LEN`、
-   `BMCU_TPU_MODEL` 等），分 `INVARIANT`（不变）/ `OTHER`（模式相关）/ `RETRACT`（含回抽长度占位符）。
-3. **每类只预编译一次 `.o`**：同样分类的源只编一次，得到少量 `.o`（常规 392 个、TPU 264 个），
+   `BMCU_TPU_FIX0~3` 等），分 `INVARIANT`（不变）/ `OTHER`（模式相关）/ `RETRACT`（含回抽长度占位符）。
+3. **每类只预编译一次 `.o`**：同样分类的源只编一次，得到少量 `.o`（约 392 个），
    **绝不每固件重编**（这是比原版快几个数量级的关键）。
 4. **链接基础 elf**：把 `.o` 链接成 16 个「基础固件」elf（每个模式组合一个，回抽长度用占位符浮点）。
 5. **二进制修补生成全部固件**：把占位符浮点在 elf 的 `.bin` 里替换为各档真实回抽长度，
-   复制出 972（常规）/ 324（TPU）个最终固件。**修补是纯字节替换，极快**。
+   复制出 972 / 1884 个最终固件。**修补是纯字节替换，极快**。
 
-**参数传递隔离（不影响原 3.2）**：TPU 分支只往 `compile_tasks` **额外追加** TPU 变体 `.o`
-（独立 `tpu_vkey` 命名空间），**从不修改常规 `vkey` 的 defs/flags**。故常规变体的宏传参、输出
-`firmwares/` 相对路径与原版完全一致。
+**参数传递（写死型号并入）**：`BMCU_TPU_FIX0~3` 作为变体宏无条件追加进所有变体的 `defs/flags`，
+不隔离、不新增命名空间、不新增产物目录。故常规变体的宏传参、输出 `firmwares/` 相对路径与原版完全一致。
 
-**TPU 全量稳定性修复（关键）**：初版 TPU 全量偶发「TPU 基础链接失败 1 个」后直接 `sys.exit(1)` 终止，
-表现像「卡住跑不完」。根因是并发链接（max_links=4）对共享 TPU `.o` / 框架 `.a` 的偶发竞争。
-现已在 `run_base_link` / `run_tpu_base_link` 的 worker 中加**失败重试（最多 2 次）**。
-实测：常规全量 972 个 **1分29秒**；TPU 全量 324 个 **53 秒**，均零失败。
+**全量稳定性**：并发链接（max_links）对共享 `.o` / 框架 `.a` 偶发竞争，已在基础链接 worker 加**失败重试（最多 2 次）**。
+实测：常规全量 972 个 **1分29秒**，均零失败。
 
-### 13.9 构建与验证
+### 14.9 构建与验证
 
-- **通用固件（默认）**：`python build_all_firmwares_fast.py` → 常规 972 个到 `firmwares/`。
-- **专用固件**：`BMCU_TPU_MODEL=GFU90 python build_all_firmwares_fast.py` → 324 个到 `firmwares-tpu/GFU90/...`。
-- **单编调试**：`bash build_one.sh standard 1 1 SOLO 0.30 1`（通用） / `... 1 GFU90`（专用）。
-- 验证要点：通用固件二进制含完整参数表，无 TPU 通道时行为与 v3.2 一致；专用固件走编译期锁定路径。
-- 实测耗时：常规全量 1分29秒（972）、TPU 全量 53 秒（324），均零失败。
+- **默认（4 通道全 GFU85）**：`python build_all_firmwares_fast.py` → 972 个到 `firmwares/`。
+- **写死 4 通道型号**：`BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_TPU_FIX3=GFU85 python build_all_firmwares_fast.py` → 仍为 972 个（每固件带 4 通道写死表）。
+- **单编调试**：`bash build_one.sh standard 1 1 SOLO 0.30 1`（默认 GFU85） / `bash build_one.sh standard 1 1 SOLO 0.30 1 GFU98 GFU90 GFU95 GFU85`（写死 4 通道）。
+- 验证要点：固件二进制含完整参数表，无 TPU 通道时行为与 v3.2 一致；某通道设为 GFU98 时内部走写死型号软料参数、回传仍 GFU98。
+- 实测耗时：常规全量 1分29秒（972），均零失败。
 
-### 13.10 AHT20 状态灯与读取重试（SYS_RGB 状态机）
+### 14.10 AHT20 状态灯与读取重试（SYS_RGB 状态机）
 
 **设计目标**：AHT20 是辅助传感器，绝不能因它异常导致 BMCU 掉线/卡死/误报通讯故障。
 同时要让用户能通过**主板系统灯（SYS_RGB）**直观判断 AHT20 是否在正常上报。
@@ -841,27 +832,20 @@ TPU 与刚性料（PLA/PETG）的本质差异：高弹性、高摩擦、易堆�
 - `is_online()==false`（没接/坏了）→ `main.cpp` **完全不进入采样分支**，温湿度保持 `ams.h` 默认 22℃/20%，BMCU 核心送料逻辑零改动；
 - `is_online()==true` 才周期采样；单次读失败**在本轮窗口内重试最多 3 次**；连续 3 次失败仅"本次采样失败"，温湿度**沿用上一次成功值**（从未成功过则保持默认 22/20），绝不清零、绝不回落到特殊值、绝不影响送料。
 
-**SYS_RGB 状态机设计（`src/main.cpp`）**
+**SYS_RGB 系统灯（仅显示通讯心跳，不显示 AHT20 事件）**
 
-为了避免 AHT20 的紫/琥珀呼吸与原有"通讯红/白"基色互相覆盖，引入一个轻量状态机，
-由主循环每帧统一刷新灯，所有写灯都收敛到 `sys_rgb_tick()`：
+系统灯只负责 BMCU 与打印机的通讯状态，由 `comm_ok` 状态机驱动，与 AHT20 无关：
+- 启动瞬间 / 首心跳前：红（短亮）；
+- 通讯正常 + 无 AHT20：浅灰白常亮 `0x38,0x35,0x32`；
+- 通讯正常 + 有 AHT20：浅灰白 **每 3 秒闪一下（约 150ms）**——为避免灯珠靠近 AHT20 发热烤高读数，间歇闪烁而非常亮；
+- 通讯失败：红 `0x10,0,0` 常亮。
 
-- 基色意图：`sys_rgb_base_t`（RED / WHITE）。原 `main.cpp` 里两处直接 `SYS_RGB.set_RGB(...)`
-  （心跳成功设白、总线错误设红）改为调用 `sys_rgb_set_base(WHITE/RED)`，**不再直接写灯**，
-  灯的实际颜色由 `sys_rgb_tick()` 每帧计算。
-- 呼吸提示：`sys_rgb_trigger_breath(r,g,b)` 启动一次呼吸（记录起始时间 + 目标色 + 激活标志）。
-  每次 `sys_rgb_tick()` 在基色之上，按三角波权重 `w∈[0,1]` 混入呼吸目标色：
-  `out = base*(1-w) + breath*w`，`w` 在 `SYS_RGB_BREATH_MS`(1s) 内 0→1→0，实现呼吸而非硬切。
-- 触发点：
-  - AHT20 成功采样一次 → `sys_rgb_trigger_breath(0x60,0x00,0x80)`（紫）；
-  - 连续 3 次读取失败 → `sys_rgb_trigger_breath(0xFF,0x60,0x00)`（琥珀）。
-- **约束**：呼吸仅在基色为 WHITE（通讯正常）时叠加；基色为 RED（通讯失败）时不做呼吸，
-  避免把"辅助传感器抖动"误显示成"通讯故障红"。
+> AHT20 **不影响任何 RGB 灯**：没接/坏了/读失败都不在系统灯或通道灯上体现，温湿度走默认 22℃/20%。详见 `docs/rgb_led_meaning.md` 第 1 节。
 
 **采样状态机（`main.cpp` 主循环内，非阻塞）**
 
 ```
-aht20_next_ms    本轮周期计时（AHT20_PERIOD_MS=10000ms）
+aht20_next_ms    本轮周期计时（AHT20_PERIOD_MS，约 2s）
 aht20_deadline   单次测量等待（start_measure 后 +90ms）
 aht20_waiting    是否处于"已触发测量、等结果"状态
 aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
@@ -870,33 +854,33 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
   if !is_online():            aht20_waiting=false            // 没传感器就不采样
   elif 到周期且!waiting:       start_measure(); waiting=true; deadline=now+90
   if waiting && now>=deadline:
-      if get_measure(t,h) 成功: 写温湿度; 触发紫呼吸; waiting=false; next=now
+      if get_measure(t,h) 成功: 写温湿度; waiting=false; next=now
       else:
           retries++
           if retries<3:   start_measure(); deadline=now+90   // 重试
-          else:           触发琥珀呼吸; waiting=false; next=now  // 3次失败,沿用上次值
+          else:           waiting=false; next=now            // 3次失败,沿用上次值
 ```
 
 **关键实现细节**
 - 重试发生在**同一轮采样窗口内**（`waiting` 期间反复 `start_measure`+等待 90ms），
-  不会跨越 10 秒周期，避免把重试拖成连续高频读。
-- 琥珀提示只表示"本次读取失败"，不表示"AHT20 消失"——`is_online()` 仍为真，
+  不会跨越周期，避免把重试拖成连续高频读。
+- 读失败只表示"本次读取失败"，不表示"AHT20 消失"——`is_online()` 仍为真，
   下一轮仍正常尝试；只有开机握手失败才彻底不采样。
-- 紫/琥珀呼吸频率自然跟随采样周期（每 10 秒一次），不额外占用主循环时间，状态机无阻塞。
+- 采样周期与系统灯心跳互不耦合，采样状态机无阻塞、不写灯。
 
 **验证**
 - 双开关 RGB_ON（SOLO 0.30）+ 单开关 RGB_OFF（AMS_D 0.80）均编译通过；
-- 行为验证（需上板）：无 AHT20 → 系统灯仅红/白、温湿度上报 22/20；
-  有 AHT20 且通讯正常 → 每 10 秒紫呼吸一次；人为制造读取失败 → 每 10 秒琥珀闪一次、温湿度保持上次值。
+- 行为验证（需上板）：无 AHT20 → 系统灯浅灰白常亮、温湿度上报 22/20；
+  有 AHT20 且通讯正常 → 系统灯每 3 秒闪一下；制造读取失败 → 温湿度保持上次值、系统灯无变化。
 
-### 13.11 TPU 间歇送料 + Stage2 装填降级（解决软料被挤出缓冲头间隙）
+### 14.11 TPU 间歇送料 + Stage2 装填降级（解决软料被挤出缓冲头间隙）
 
 > 本节记录 `dev/v4.0-tpu` 分支在 13.2/13.4 基础上，针对实测问题的二次增强。
 > 背景：实测 `GFU95`（TPU 95A，RGB 识别色确认已识别为黄色 TPU）时，料不从管道正常进入，
 > 而是被连续推力从缓冲头（buffer）间隙挤出来。根因是此前 TPU 降级**只覆盖了 on_use 常态闭环**
 > （表 A 的 `feed_pwm_hi/lo`），而**Stage2 装填阶段与"持续转"行为未处理**，软料被持续猛推导致挤出。
 
-#### 13.11.1 问题根因
+#### 14.11.1 问题根因
 
 - **Stage2 装填阶段未接 TPU 降级**：`hold_load()`（装填保持逻辑）原用 `MC_LOAD_S2_PWM_HI/LO` 硬编码常量
   （`_S2_PWM_LO = 1000` 全速），**完全没接 `tpu_p->feed_pwm_hi/lo`**。即 TPU 在装填那一脚仍走刚性料 1000 全速，
@@ -907,7 +891,7 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
 - **`pct_fast_onuse` 硬编码 50% 对软料偏高**：95A 的 `target=45`，原 `pct_fast_onuse=50` 导致缓冲头稍回落就给大推力，
   加剧过推。
 
-#### 13.11.2 改动清单
+#### 14.11.2 改动清单
 
 **`src/tpu_params.h`**：`_tpu_param` 结构新增两个字段，参数表逐型号补初值（越软停越久）：
 
@@ -951,7 +935,7 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
    - 覆盖 Stage2 装填 / on_use 常态 / 顶满避让**所有正向送料分支**，刚性料（`tpu_p_run==nullptr`）零差异。
    - `pwm_out0` 由 `const int` 改为 `int` 以支持停窗口清零。
 
-#### 13.11.3 效果与验证
+#### 14.11.3 效果与验证
 
 - TPU 通道不再是「持续猛推」，而是「推一段（周期 800~1200ms，推窗口约 400~500ms）→ 停一段（电机停转）→ 再推」的
   间歇脉冲式送料；缓冲头不被持续顶着，软料靠停窗口松弛/被打印机拉走，正常进入管道而非从间隙挤出。

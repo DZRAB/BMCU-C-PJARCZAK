@@ -7,7 +7,7 @@
 #   - 本脚本用 single_build/（单独补编专用，同样被 .gitignore 忽略，不与 firmwares/ 混淆）
 #
 # 用法：
-#   bash build_one.sh <MODE> <AUTOLOAD> <RGB> <SLOT> <RETRACT> [AUTO_RETRACT] [TPU_MODEL]
+#   bash build_one.sh <MODE> <AUTOLOAD> <RGB> <SLOT> <RETRACT> [AUTO_RETRACT] [TPU0 TPU1 TPU2 TPU3]
 #
 # 参数：
 #   MODE      standard | p1s | softload   （分别对应 standard(A1) / high_force_load(P1S) / soft_load(A1)）
@@ -16,14 +16,15 @@
 #   SLOT      SOLO | A | B | C | D         （AMS 槽位；SOLO 回抽默认 0.095）
 #   RETRACT   回抽长度(米)，如 0.30         （SOLO 可省略，默认 0.095；AUTOLOAD=1 且 AUTO_RETRACT=1 时忽略，回抽由 S2 自动判定）
 #   AUTO_RETRACT  (可选) 1 | 0              （默认 1；仅对 AUTOLOAD=1 生效。1=自动回抽 _auto；0=双开关也按固定长度矩阵编译，与 2.0 一致）
-#   TPU_MODEL (可选) Bambu filament_id      （如 GFU98 / GFU90 / GFU85。提供则编译"TPU 专用固件"，
-#                                            以该型号软料参数运行；不提供则完全保持 v3.2 行为，零差异）
+#   TPU0..3  (可选) 各通道 Bambu filament_id 写死型号（GFU98/GFU00/GFU02/GFU95/GFU90/GFU85）。固件内置 TPU 逻辑，
+#            仅当打印机将该通道设为 TPU for AMS(GFU98) 时生效，内部用写死型号跑；不提供则全部保底 GFU85。
+#            与普通固件数量一致，不新增变体维度。
 #
 # 示例：
-#   bash build_one.sh standard 1 1 SOLO            # 双开关自动回抽 -> solo_2.00f_auto.bin（忽略回抽长度，S2 自动判定）
+#   bash build_one.sh standard 1 1 SOLO            # 双开关自动回抽 -> solo_2.00f_auto.bin
 #   bash build_one.sh standard 1 1 A  0.30 0       # 双开关固定长度模式 -> ams_a_0.30f.bin（同 2.0）
-#   bash build_one.sh p1s 0 1 D 0.80               # 单开关 NO_AUTOLOAD 仍需选回抽长度 -> ams_d_0.80f.bin
-#   bash build_one.sh standard 1 1 SOLO 0.30 1 GFU90   # TPU 专用：GFU90(TPU 90A) 软料参数固件
+#   bash build_one.sh p1s 0 1 D 0.80               # 单开关 NO_AUTOLOAD -> ams_d_0.80f.bin
+#   bash build_one.sh standard 1 1 A 0.30 1 GFU98 GFU90 GFU95 GFU85   # 4 通道写死型号
 #
 # 产物相对路径结构（子目录层级与固件命名）与 build_all_firmwares_softload.sh 完全一致，仅根目录为 single_build/，可直接并入 firmwares/ 后发布到 Releases。
 # 注意：不会删除现有 single_build/，只把单个固件放入对应位置。
@@ -39,24 +40,19 @@ RGB="${3:-1}"
 SLOT="${4:-SOLO}"
 RETRACT="${5:-}"
 AUTO_RETRACT="${6:-1}"
-TPU_MODEL="${7:-}"
+# v4.0-tpu: 4 通道写死型号（第 7~10 位置参数），缺省保底 GFU85（最软最稳）
+TPU_FIX0="${7:-GFU85}"
+TPU_FIX1="${8:-GFU85}"
+TPU_FIX2="${9:-GFU85}"
+TPU_FIX3="${10:-GFU85}"
 
 # --- 模式映射 ---
-# v4.0-tpu：TPU 专用固件不区分 standard/p1s/soft_load 三种推力模式（TPU 软料参数已在
-# tpu_params.h 按型号硬度定制，无需再叠加推力模式）。TPU 一律以标准推力为基准
-# （P1S=0, SOFT_LOAD=0），目录层用型号名（如 GFU90）顶替原模式层。
-if [[ -n "${TPU_MODEL}" ]]; then
-  mode_dir="${TPU_MODEL}"
-  p1s=0
-  softload=0
-else
-  case "${MODE}" in
-    standard) mode_dir="standard(A1)";      p1s=0; softload=0 ;;
-    p1s)      mode_dir="high_force_load(P1S)"; p1s=1; softload=0 ;;
-    softload) mode_dir="soft_load(A1)";     p1s=0; softload=1 ;;
-    *) echo "ERROR: MODE 必须是 standard | p1s | softload"; exit 1 ;;
-  esac
-fi
+case "${MODE}" in
+  standard) mode_dir="standard(A1)";      p1s=0; softload=0 ;;
+  p1s)      mode_dir="high_force_load(P1S)"; p1s=1; softload=0 ;;
+  softload) mode_dir="soft_load(A1)";     p1s=0; softload=1 ;;
+  *) echo "ERROR: MODE 必须是 standard | p1s | softload"; exit 1 ;;
+esac
 
 # --- 槽位映射 ---
 case "${SLOT}" in
@@ -107,20 +103,13 @@ fi
 dm_dir=$([[ "${AUTOLOAD}" == "1" ]] && echo AUTOLOAD || echo NO_AUTOLOAD)
 rgb_dir=$([[ "${RGB}" == "1" ]] && echo FILAMENT_RGB_ON || echo FILAMENT_RGB_OFF)
 
-# v4.0-tpu: TPU 专用固件单独成层，避免与常规 v3.2 固件混淆
-tpu_dir=""
-if [[ -n "${TPU_MODEL}" ]]; then
-  tpu_dir="TPU_${TPU_MODEL}/"
-fi
+out_path="single_build/${mode_dir}/${dm_dir}/${rgb_dir}/${slot_dir}/${bin_name}"
 
-out_path="single_build/${tpu_dir}${mode_dir}/${dm_dir}/${rgb_dir}/${slot_dir}/${bin_name}"
+echo "=== BUILD: P1S=${p1s} SOFT_LOAD=${softload} DM=${AUTOLOAD} RGB=${RGB} AMS_NUM=${ams_num} RETRACT=${RETRACT}f TPU_FIX=${TPU_FIX0},${TPU_FIX1},${TPU_FIX2},${TPU_FIX3} -> ${out_path}"
 
-echo "=== BUILD: P1S=${p1s} SOFT_LOAD=${softload} DM=${AUTOLOAD} RGB=${RGB} AMS_NUM=${ams_num} RETRACT=${RETRACT}f TPU=${TPU_MODEL:-none} -> ${out_path}"
-
-# v4.0-tpu: 仅当显式提供 TPU_MODEL 时才注入 BMCU_TPU_MODEL 宏；
-# 不提供时该宏完全不定义，固件行为与 v3.2 零差异（不污染原版/常规构建）。
-# 注意：通过 PLATFORMIO_BUILD_FLAGS 环境变量注入（PlatformIO 会自动追加到
-# 所有环境的 build_flags），不修改 platformio.ini 原版脚本。
+# v4.0-tpu: 通用固件内置 TPU 逻辑，无条件注入 4 通道写死型号宏（缺省 GFU85）。
+# 通过 PLATFORMIO_BUILD_FLAGS 环境变量注入（PlatformIO 自动追加到所有环境 build_flags），
+# 不修改 platformio.ini。
 pio_env=()
 pio_env+=( BAMBU_BUS_AMS_NUM="${ams_num}" )
 pio_env+=( AMS_RETRACT_LEN="${RETRACT}f" )
@@ -129,9 +118,7 @@ pio_env+=( BMCU_ONLINE_LED_FILAMENT_RGB="${RGB}" )
 pio_env+=( DBMCU_P1S="${p1s}" )
 pio_env+=( BMCU_SOFT_LOAD="${softload}" )
 pio_env+=( BMCU_DM_AUTO_RETRACT="${AUTO_RETRACT_FLAG}" )
-if [[ -n "${TPU_MODEL}" ]]; then
-  pio_env+=( PLATFORMIO_BUILD_FLAGS="-DBMCU_TPU_MODEL=${TPU_MODEL}" )
-fi
+pio_env+=( PLATFORMIO_BUILD_FLAGS="-DBMCU_TPU_FIX0=${TPU_FIX0} -DBMCU_TPU_FIX1=${TPU_FIX1} -DBMCU_TPU_FIX2=${TPU_FIX2} -DBMCU_TPU_FIX3=${TPU_FIX3}" )
 
 env "${pio_env[@]}" pio run -e fw
 
@@ -147,9 +134,8 @@ TXT_AUTOLOAD="which_to_choose_autoload.txt"
 TXT_RGB="which_to_choose_filament_rgb.txt"
 TXT_SLOTS="which_to_choose_slots.txt"
 # 各层选型指南目录（cp 不会自动建父目录，先 mkdir -p）
-# v4.0-tpu：选型指南目录必须与固件目录对齐，TPU 时带 tpu_dir 前缀，否则会多生成
-# 错位文件夹（如 single_build/GFU90/... 与 single_build/TPU_GFU90/GFU90/... 重复）。
-guide_base="single_build/${tpu_dir}"
+# v4.0-tpu：选型指南目录与固件目录对齐（无 TPU 独立层，固件内置写死表不新增维度）
+guide_base="single_build/"
 mkdir -p "${guide_base}${mode_dir}/${dm_dir}/${rgb_dir}"
 # 顶层 single_build/ 或 single_build/TPU_xxx/：模式选型指南
 [[ -f "${TXT_MODE}" ]]    && cp -f "${TXT_MODE}"    "${guide_base}README.md"
