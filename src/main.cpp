@@ -257,18 +257,17 @@ int main(void)
         bus_port_to_host.send_package();
 
         static int error = 0;
+        static bool comm_ok = true;   // 通讯是否正常（供心跳灯状态机使用）
 
         if ((ahub_stu != ahubus_package_type::none) || (bambubus_stu != bambubus_package_type::none))
         {
             if ((ahub_stu != ahubus_package_type::error) || (bambubus_stu != bambubus_package_type::error))
             {
                 error = 0;
+                comm_ok = true;
 
                 if (bambubus_stu == bambubus_package_type::heartbeat)
-                {
-                    SYS_RGB.set_RGB(0x38, 0x35, 0x32, 0);
                     bus_host_device_type = host_device_type_ams;
-                }
 
                 if (ahub_stu == ahubus_package_type::heartbeat)
                     bus_host_device_type = host_device_type_ahub;
@@ -279,7 +278,51 @@ int main(void)
             else
             {
                 error = -1;
+                comm_ok = false;
+            }
+        }
+
+        // ===== SYS_RGB 心跳指示灯 =====
+        // 有 AHT20 时：白灯常亮会烤高温度，故改为每 3 秒闪一下白光（~150ms），异常时红灯常亮；
+        // 无 AHT20 时：保持原白色常亮逻辑（无烤温顾虑，且状态可见）。
+        {
+            static uint64_t hb_next_ms   = 0;
+            static uint64_t hb_off_ms    = 0;
+            static bool     hb_lit       = false;
+            const uint64_t  now_ms       = time_ms64();
+            const uint64_t  HB_PERIOD_MS = 3000u;   // 闪烁周期
+            const uint64_t  HB_LIT_MS    = 150u;    // 单次点亮时长
+
+            if (comm_ok)
+            {
+                if (g_aht20.is_online())
+                {
+                    // 有 AHT20：闪烁模式，避免常亮烤温
+                    if (!hb_lit && (now_ms - hb_next_ms) >= HB_PERIOD_MS)
+                    {
+                        SYS_RGB.set_RGB(0x38, 0x35, 0x32, 0);
+                        hb_lit    = true;
+                        hb_off_ms = now_ms + HB_LIT_MS;
+                    }
+                    else if (hb_lit && now_ms >= hb_off_ms)
+                    {
+                        SYS_RGB.set_RGB(0x00, 0x00, 0x00, 0);
+                        hb_lit    = false;
+                        hb_next_ms = now_ms;
+                    }
+                }
+                else
+                {
+                    // 无 AHT20：原白色常亮
+                    SYS_RGB.set_RGB(0x38, 0x35, 0x32, 0);
+                    hb_lit = false;
+                }
+            }
+            else
+            {
+                // 通讯异常：红色常亮
                 SYS_RGB.set_RGB(0x10, 0x00, 0x00, 0);
+                hb_lit = false;
             }
         }
 
