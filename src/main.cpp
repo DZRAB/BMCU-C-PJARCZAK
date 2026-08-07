@@ -314,7 +314,7 @@ int main(void)
             else
             {
                 error = -1;
-                comm_ok = false;   // [测试用] 取消注释以模拟通讯失败，便于不上机测试功能；正式提交前需恢复为通讯成功
+                comm_ok = false;   // 通讯失败(收不到合法主机包)时标记 comm_ok=false；注释掉此行则 comm_ok 恒为 true，可在不上机时模拟通讯成功状态
             }
         }
 

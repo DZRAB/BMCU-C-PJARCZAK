@@ -507,9 +507,12 @@ void SSD1306_OLED::draw_channels()
         }
         else
         {
-            // 有料：显示型号（TPU 显写死型号，其它显材质名）
-            const char* mat = material_label(r);
-            for (int i = 0; mat[i] && n < 7; i++) line[n++] = mat[i];
+            // [DEBUG] 临时显示运行时 filament_type 与 tpu_model 枚举值，定位写死表是否生效
+            // 格式: "T<type>F<model>"  type:5=tpu  model:0=UNK 1=98 2=00 3=02 4=95 5=90 6=85
+            line[n++] = 'T';
+            line[n++] = (char)('0' + (int)f.filament_type);
+            line[n++] = 'F';
+            line[n++] = (char)('0' + (int)f.tpu_model);
             const char* c = color_name(f.color_R, f.color_G, f.color_B);
             line[8] = c[0]; line[9] = c[1]; line[10] = c[2];
         }
