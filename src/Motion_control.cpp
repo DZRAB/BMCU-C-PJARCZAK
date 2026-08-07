@@ -2942,6 +2942,10 @@ static void motor_motion_run(int error, uint64_t time_now, uint32_t now_ticks)
             }
         }
 
+        // 临时调试（验证期）：RGB_OFF 模式下关闭 STU 状态灯，只留 PULL 写死灯，
+        // 避免两颗灯挨太近颜色混淆。后续恢复正常现象时删除本行 MC_STU_RGB_set 调用。
+        MC_STU_RGB_set(i, 0u, 0u, 0u);
+
         MC_PULL_ONLINE_RGB_set(i, r, g, b, is_filament_rgb);
     }
 }

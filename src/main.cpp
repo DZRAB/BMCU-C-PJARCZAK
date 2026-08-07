@@ -220,16 +220,29 @@ int main(void)
         RGB_update();
     }
 
+#ifdef BMCU_OLED
+    // OLED 在 AHT20 自检后立即初始化（复用其 I2C 引脚），让屏从开机最早阶段就参与，
+    // 显示系统启动进度，而非等所有初始化跑完才亮。
+    SSD1306_OLED::init();
+    if (SSD1306_OLED::is_ready())
+        SSD1306_OLED::draw_message("BMCU BOOT", "", "", "");
+#endif // BMCU_OLED
+
+#ifdef BMCU_OLED
+    if (SSD1306_OLED::is_ready())
+        SSD1306_OLED::draw_message("BMCU BOOT", "CALIB...", "", "");
+#endif // BMCU_OLED
     MC_PULL_calibration_boot();
+#ifdef BMCU_OLED
+    if (SSD1306_OLED::is_ready())
+        SSD1306_OLED::draw_message("BMCU BOOT", "CALIB OK", "", "");
+#endif // BMCU_OLED
+
     ams_datas_read();
 
 #ifdef BMCU_OLED
-    // OLED 初始化：复用 AHT20 总线（引脚已在 g_aht20.init() 配置）。
-    // AHT20 采样照常进行，不被屏蔽；OLED 仅在其 init 后读取温湿度显示。
-    SSD1306_OLED::init();
-    SSD1306_OLED::draw_aht20(g_aht20.is_online(),
-                             g_aht20.temperature_c,
-                             g_aht20.humidity_percent);
+    if (SSD1306_OLED::is_ready())
+        SSD1306_OLED::draw_message("BMCU BOOT", "LOAD...", "", "");
 #endif // BMCU_OLED
 
     {
@@ -253,6 +266,19 @@ int main(void)
             }
         }
     }
+
+#ifdef BMCU_OLED
+    if (SSD1306_OLED::is_ready())
+    {
+        // 开机完成：切到常规画面（有 AHT20 显温湿度，无则 NO AHT20）。
+        if (g_aht20.is_online())
+            SSD1306_OLED::draw_aht20(true, true,
+                                     g_aht20.temperature_c,
+                                     g_aht20.humidity_percent, true);
+        else
+            SSD1306_OLED::draw_aht20(false, false, 0.0f, 0.0f, true);
+    }
+#endif // BMCU_OLED
 
     Motion_control_init();
     bambubus_init();
@@ -288,7 +314,7 @@ int main(void)
             else
             {
                 error = -1;
-                comm_ok = false;
+                comm_ok = false;   // [测试用] 取消注释以模拟通讯失败，便于不上机测试功能；正式提交前需恢复为通讯成功
             }
         }
 
@@ -378,16 +404,44 @@ int main(void)
         // ===== OLED 显示（复用 AHT20 软件 I2C 总线）=====
         // 独立于 AHT20 采样临界区：上面采样块已完成 get_measure，此处只读取
         // g_aht20.temperature_c / humidity_percent 并刷新屏幕，不触发 AHT20 测量，
-        // 因此不会打断 AHT20 的 I2C 时序。1 秒刷新一次。
+        // 因此不会打断 AHT20 的 I2C 时序。
+        // 能力矩阵：
+        //   - 屏未就绪（s_ready=false）：每 10s 重探 init()，热插拔屏可自动点亮；
+        //     重探前后就绪态翻转时清屏，避免残留旧画面。
+        //   - 屏就绪 + 有 AHT20：1s 刷新温湿度画面。
+        //   - 屏就绪 + 无 AHT20：显示 "NO AHT20"，不刷温湿度（省 I2C 且语义清晰）。
         {
-            static uint64_t oled_next_ms = 0;
-            const uint64_t now_ms = time_ms64();
+            static uint64_t oled_next_ms   = 0;
+            static uint64_t oled_probe_ms  = 0;   // 重探周期计时
+            static bool     oled_was_ready = false;
+            const uint64_t  now_ms = time_ms64();
+
+            // 运行期重探：屏未就绪时每 10s 重试 init()，支持热插拔。
+            if (!SSD1306_OLED::is_ready() && (now_ms - oled_probe_ms) >= 10000u)
+            {
+                oled_probe_ms = now_ms;
+                SSD1306_OLED::init();   // 复用 AHT20 总线，重发初始化序列并探测 ACK
+            }
+
+            // 就绪态翻转：清屏，避免屏刚插上残留上电前的乱码/旧画面。
+            if (oled_was_ready != SSD1306_OLED::is_ready())
+            {
+                oled_was_ready = SSD1306_OLED::is_ready();
+                if (SSD1306_OLED::is_ready())
+                    SSD1306_OLED::clear();
+            }
+
             if ((now_ms - oled_next_ms) >= 1000u)
             {
                 oled_next_ms = now_ms;
-                SSD1306_OLED::draw_aht20(g_aht20.is_online(),
-                                         g_aht20.temperature_c,
-                                         g_aht20.humidity_percent);
+                // v4.0 OLED 增强：调 tick() 统一调度多页轮询 + 动作覆盖显示。
+                // tick 内部按能力矩阵处理：无 AHT20 时温湿度页显示 NO AHT20；
+                // 有动作（notify_action 触发）时优先覆盖显示，否则轮询各页。
+                const bool aht20_present = g_aht20.is_online();
+                SSD1306_OLED::tick(aht20_present, aht20_present,
+                                   g_aht20.temperature_c,
+                                   g_aht20.humidity_percent,
+                                   comm_ok);
             }
         }
 #endif // BMCU_OLED

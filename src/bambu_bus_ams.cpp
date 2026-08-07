@@ -8,6 +8,7 @@
 #include "crc_bus.h"
 #include "sim_aht20.h"
 #include "motion_control.h"
+#include "oled/ssd1306_oled.h"   // v4.0 OLED：动作覆盖显示 notify_action
 
 uint8_t bambubus_ams_map[4] = {0, 1, 2, 3};
 static void bambubus_build_static_serial(void);
@@ -54,6 +55,11 @@ void bambubus_init()
 {
     bambubus_build_static_serial();
     bambubus_heartbeat_deadline = 0u;
+
+    // v4.0 fix: 标记本机 AMS 槽位在线。否则 get_package_online_detect /
+    // get_package_set_filament* 全部因 online 拦截而 return，filament_type
+    // 永远停在 unknown，TPU 写死逻辑与材质上报永不生效。
+    ams[bambubus_ams_map[(uint8_t)BAMBU_BUS_AMS_NUM]].online = true;
 }
 
 void package_add_crc(uint8_t *data, int send_data_length) // 为数据包添加crc校验
@@ -261,6 +267,7 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
             ams_ptr->filament[ch].motion = _filament_motion::send_out;
             ams_ptr->filament_use_flag = 0x02;
             ams_ptr->pressure = 0x4700;
+            SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_load);   // 进料覆盖显示
         }
         else if (is_before_on_use)
         {
@@ -353,6 +360,7 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
 
             ams_ptr->filament[ch].motion = _filament_motion::on_use;
             ams_ptr->filament_use_flag = 0x04;
+            SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_feed);   // 送料覆盖显示
 
             if (ams_ptr->pressure != 0xF06Fu) ams_ptr->pressure = 0x2B00;
 
@@ -378,6 +386,7 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
             {
                 ams_ptr->filament[ch].motion = _filament_motion::before_pull_back;
             }
+            SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_unload); // 退料覆盖显示
 
             ams_ptr->filament_use_flag = 0x04;
             ams_ptr->pressure = 0x2B00;
@@ -409,6 +418,7 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
                 {
                     ams_ptr->filament[ch].motion = _filament_motion::pull_back;
                     ams_ptr->filament_use_flag = 0x02;
+                    SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_unload); // 退料覆盖显示
                 }
 
                 ams_ptr->pressure = 0x4700;

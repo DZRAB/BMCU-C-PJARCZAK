@@ -13,6 +13,8 @@
 #include "ssd1306_oled.h"
 #include "aht20/aht20.h"   // AHT20 类：bus_start/bus_write/bus_stop + 全局 g_aht20
 #include "hal/time_hw.h"   // delay()
+#include "ams.h"           // ams[] / _filament / _filament_motion / BAMBU_BUS_AMS_NUM（只读通道数据）
+#include "tpu_params.h"    // TPU_FIXED_ID[4] v4.0-tpu 写死型号表
 
 #ifdef BMCU_OLED
 
@@ -35,17 +37,40 @@ static void str_cpy(char* dst, const char* src)
 }
 
 // ---------- 底层 I2C 发送（复用 AHT20 总线）----------
-static void oled_send(uint8_t ctrl, uint8_t data)
+// SSD1306 支持「连续写」：一次 start + 地址 + 控制字节(0x40) 之后，
+// 可以连续发任意多个数据字节，最后才 stop。相比「逐字节一次完整事务」，
+// 可把 I2C 事务次数从 N 降到 1，软件 I2C 下帧率提升非常明显（去卡顿核心）。
+static void oled_start_data(void)
 {
     g_aht20.bus_start();
     g_aht20.bus_write((uint8_t)(BMCU_OLED_ADDR << 1u)); // 地址写
-    g_aht20.bus_write(ctrl);                            // 0x00=命令, 0x40=数据
-    g_aht20.bus_write(data);
+    g_aht20.bus_write(0x40u);                           // 0x40=后续为数据
+}
+static void oled_start_cmd(void)
+{
+    g_aht20.bus_start();
+    g_aht20.bus_write((uint8_t)(BMCU_OLED_ADDR << 1u)); // 地址写
+    g_aht20.bus_write(0x00u);                           // 0x00=后续为命令
+}
+static void oled_stop(void)
+{
     g_aht20.bus_stop();
 }
 
-void SSD1306_OLED::write_cmd(uint8_t c)  { oled_send(0x00u, c); }
-void SSD1306_OLED::write_data(uint8_t d) { oled_send(0x40u, d); }
+// 单字节命令（init 序列用，本来就零星发）
+void SSD1306_OLED::write_cmd(uint8_t c)
+{
+    oled_start_cmd();
+    g_aht20.bus_write(c);
+    oled_stop();
+}
+// 单字节数据（极少用，保留兼容）
+void SSD1306_OLED::write_data(uint8_t d)
+{
+    oled_start_data();
+    g_aht20.bus_write(d);
+    oled_stop();
+}
 
 // 设置显示起始位置（页寻址模式）：page∈[0,7]，col∈[0,127]
 void SSD1306_OLED::set_pos(uint8_t page, uint8_t col)
@@ -53,6 +78,15 @@ void SSD1306_OLED::set_pos(uint8_t page, uint8_t col)
     write_cmd(0xB0u + (page & 0x07u));             // 页地址
     write_cmd(0x00u + (col & 0x0Fu));              // 列低 4 位
     write_cmd(0x10u + ((col >> 4u) & 0x0Fu));      // 列高 4 位
+}
+
+// 连续发数据（一次 I2C 事务）：先 set_pos 定位，再调本函数批量写
+static void oled_write_data_bulk(const uint8_t* data, uint8_t n)
+{
+    oled_start_data();
+    for (uint8_t i = 0; i < n; i++)
+        g_aht20.bus_write(data[i]);
+    oled_stop();
 }
 
 // ---------- 8x16 ASCII 字模（移植自江协科技 OLED 库，字符 0x20~0x7E，每字符 16 字节）----------
@@ -173,17 +207,23 @@ static const uint8_t InitCmd[] = {
     0xAF         // 开启显示
 };
 
+// 探测 OLED ACK（不修改 s_ready，仅返回是否应答）。用于运行时掉线/热插拔检测。
+bool SSD1306_OLED::probe_ack()
+{
+    g_aht20.bus_start();
+    bool ack = g_aht20.bus_write((uint8_t)(BMCU_OLED_ADDR << 1u));
+    g_aht20.bus_stop();
+    delay(1);
+    return ack;
+}
+
 void SSD1306_OLED::init()
 {
     // 引脚已由 main 中 g_aht20.init() 配置（PB10/PB11 开漏），此处直接发序列。
     delay(200);   // 上电稳定（SSD1306 上电到可收命令需 >100ms，给足余量）
 
     // 探测 OLED ACK（仅记录，不影响后续发序列；部分模块边缘不回 ACK 但仍可点亮）
-    g_aht20.bus_start();
-    bool ack = g_aht20.bus_write((uint8_t)(BMCU_OLED_ADDR << 1u));
-    g_aht20.bus_stop();
-    s_ready = ack;
-    delay(1);
+    s_ready = probe_ack();
 
     // 初始化命令序列（显式页寻址 + 整屏范围，最大化兼容性）
     for (uint8_t i = 0; i < sizeof(InitCmd); i++)
@@ -194,23 +234,28 @@ void SSD1306_OLED::init()
 
 void SSD1306_OLED::clear()
 {
+    static const uint8_t zero[OLED_W] = {0};   // 全 0 即清屏像素
     for (uint8_t page = 0; page < 8; page++)
     {
         set_pos(page, 0);
-        for (uint8_t col = 0; col < OLED_W; col++)
-            write_data(0x00u);
+        oled_write_data_bulk(zero, OLED_W);     // 一次事务清一整页（128 字节）
     }
+    // 同步清空行缓存：清屏后屏上无内容，但 s_line_buf 仍残留旧文本会导致
+    // draw_line_if_changed 误判"未变化"而不重绘（标题/内容消失）。清空缓存
+    // 可使下一次绘制强制全量重写。
+    for (uint8_t r = 0; r < OLED_LINES; r++)
+        s_line_buf[r][0] = '\0';
 }
 
 void SSD1306_OLED::clear_line(uint8_t row)
 {
     if (row >= OLED_LINES) return;
     uint8_t page0 = (uint8_t)(row * 2u);   // 8x16 字模占 2 页
+    static const uint8_t zero[OLED_W] = {0};
     for (uint8_t p = 0; p < 2; p++)
     {
         set_pos((uint8_t)(page0 + p), 0);
-        for (uint8_t col = 0; col < OLED_W; col++)
-            write_data(0x00u);
+        oled_write_data_bulk(zero, OLED_W); // 一次事务清两页（256 字节）
     }
 }
 
@@ -223,12 +268,12 @@ void SSD1306_OLED::show_char(uint8_t row, uint8_t col, char ch)
     uint8_t pg0 = (uint8_t)(row * 2u);
     const uint8_t* p = OLED_F8x16[(uint8_t)ch - 0x20u];
 
-    // 上 8 行
+    // 上 8 行：一次事务连续写 8 字节
     set_pos(pg0, x);
-    for (uint8_t i = 0; i < 8; i++) write_data(p[i]);
-    // 下 8 行
+    oled_write_data_bulk(p, 8u);
+    // 下 8 行：一次事务连续写 8 字节
     set_pos((uint8_t)(pg0 + 1u), x);
-    for (uint8_t i = 8; i < 16; i++) write_data(p[i]);
+    oled_write_data_bulk(p + 8u, 8u);
 }
 
 void SSD1306_OLED::show_text(uint8_t row, uint8_t col, const char* str)
@@ -254,12 +299,33 @@ void SSD1306_OLED::draw_line_if_changed(uint8_t row, const char* text)
     show_text(row, 0, text);
 }
 
-void SSD1306_OLED::draw_aht20(bool online, float temperature_c, float humidity_percent)
+void SSD1306_OLED::draw_message(const char* line0, const char* line1,
+                                 const char* line2, const char* line3)
+{
+    if (!s_ready) return;   // 屏未就绪，不画
+
+    draw_line_if_changed(0, line0 ? line0 : "");
+    draw_line_if_changed(1, line1 ? line1 : "");
+    draw_line_if_changed(2, line2 ? line2 : "");
+    draw_line_if_changed(3, line3 ? line3 : "");
+}
+
+void SSD1306_OLED::draw_aht20(bool aht20_present, bool online, float temperature_c, float humidity_percent, bool comm_ok)
 {
     if (!s_ready)
     {
         // 未探测到 OLED：仍尝试提示，方便判断（部分模块边缘能亮）
         draw_line_if_changed(0, "OLED NO ACK");
+        return;
+    }
+
+    // 板上无 AHT20：不显示任何温湿度，明确告知用户，避免误以为传感器坏。
+    if (!aht20_present)
+    {
+        draw_line_if_changed(0, "NO AHT20");
+        draw_line_if_changed(1, "");
+        draw_line_if_changed(2, "");
+        draw_line_if_changed(3, "");
         return;
     }
 
@@ -275,40 +341,282 @@ void SSD1306_OLED::draw_aht20(bool online, float temperature_c, float humidity_p
     }
 
     // 温度/湿度用整数运算拼字符串（避免依赖 printf 浮点，省 Flash 更稳）
-    // T:-12.3C / H: 56.7% 形式，行宽 16 足够
+    // T/H 合并到同一行： T:23.5C H:45.6%
     int16_t ti = (int16_t)(temperature_c * 10.0f);   // 放大 10 倍
     uint16_t hi = (uint16_t)(humidity_percent * 10.0f);
 
-    char tbuf[16];
+    char thbuf[OLED_COLS + 1u];
+    for (uint8_t i = 0; i < OLED_COLS; i++) thbuf[i] = ' ';
+    thbuf[OLED_COLS] = 0;
+    int n = 0;
+    thbuf[n++] = 'T'; thbuf[n++] = ':';
     if (ti < 0) {
         ti = (int16_t)(-ti);
-        tbuf[0] = 'T'; tbuf[1] = ':'; tbuf[2] = '-';
-        tbuf[3] = (char)('0' + (ti / 100) % 10);
-        tbuf[4] = (char)('0' + (ti / 10) % 10);
-        tbuf[5] = '.';
-        tbuf[6] = (char)('0' + (ti % 10));
-        tbuf[7] = 'C'; tbuf[8] = 0;
-    } else {
-        tbuf[0] = 'T'; tbuf[1] = ':';
-        tbuf[2] = (char)('0' + (ti / 100) % 10);
-        tbuf[3] = (char)('0' + (ti / 10) % 10);
-        tbuf[4] = '.';
-        tbuf[5] = (char)('0' + (ti % 10));
-        tbuf[6] = 'C'; tbuf[7] = 0;
+        thbuf[n++] = '-';
     }
-    draw_line_if_changed(1, tbuf);
+    thbuf[n++] = (char)('0' + (ti / 100) % 10);
+    thbuf[n++] = (char)('0' + (ti / 10) % 10);
+    thbuf[n++] = '.';
+    thbuf[n++] = (char)('0' + (ti % 10));
+    thbuf[n++] = 'C';
+    // 间隔空格
+    thbuf[n++] = ' '; thbuf[n++] = ' ';
+    thbuf[n++] = 'H'; thbuf[n++] = ':';
+    thbuf[n++] = (char)('0' + (hi / 100) % 10);
+    thbuf[n++] = (char)('0' + (hi / 10) % 10);
+    thbuf[n++] = '.';
+    thbuf[n++] = (char)('0' + (hi % 10));
+    thbuf[n++] = '%';
+    draw_line_if_changed(1, thbuf);
 
-    char hbuf[16];
-    hbuf[0] = 'H'; hbuf[1] = ':';
-    hbuf[2] = (char)('0' + (hi / 100) % 10);
-    hbuf[3] = (char)('0' + (hi / 10) % 10);
-    hbuf[4] = '.';
-    hbuf[5] = (char)('0' + (hi % 10));
-    hbuf[6] = '%'; hbuf[7] = 0;
-    draw_line_if_changed(2, hbuf);
+    // 第2行：通讯状态
+    draw_line_if_changed(2, comm_ok ? "COMM OK " : "COMM ERR");
 
-    // 第3行留空（保持空串，内容不变则不重写）
-    draw_line_if_changed(3, "");
+    // 第3行：写死 TPU 型号摘要（LOCK 标识，紧凑显示末两位：GFU02->02 ...）
+    char lbuf[OLED_COLS + 1u];
+    for (uint8_t i = 0; i < OLED_COLS; i++) lbuf[i] = ' ';
+    lbuf[OLED_COLS] = 0;
+    int ln = 0;
+    lbuf[ln++] = 'L'; lbuf[ln++] = ':';
+    for (uint8_t c = 0; c < 4; c++)
+    {
+        const char* id = TPU_FIXED_ID[c];
+        int idlen = 0;
+        while (id && id[idlen]) idlen++;
+        if (idlen >= 2) { lbuf[ln++] = id[idlen - 2]; lbuf[ln++] = id[idlen - 1]; }
+        else if (id && idlen == 1) { lbuf[ln++] = id[0]; }
+        if (c < 3) lbuf[ln++] = '/';
+    }
+    draw_line_if_changed(3, lbuf);
+}
+
+// ---------- 多页面轮询 + 动作覆盖显示（v4.0 OLED 增强）----------
+
+// 通道运动态 -> 屏上短标签（≤4字符）
+const char* SSD1306_OLED::motion_label(_filament_motion m)
+{
+    switch (m)
+    {
+        case _filament_motion::idle:           return "IDLE";
+        case _filament_motion::send_out:       return "LOAD";  // 进料
+        case _filament_motion::before_on_use:  return "PREP";  // 准备上料
+        case _filament_motion::on_use:         return "FEED";  // 供料中
+        case _filament_motion::stop_on_use:    return "STOP";  // 停止供料
+        case _filament_motion::before_pull_back: return "PRET"; // 准备退料
+        case _filament_motion::pull_back:      return "UNLD";  // 退料
+        default:                               return "----";
+    }
+}
+
+// 通道材质/TPU型号 -> 屏上短标签（≤6字符）
+const char* SSD1306_OLED::material_label(uint8_t ch)
+{
+    if (ch >= 4) return "----";
+    const _filament& f = ams[BAMBU_BUS_AMS_NUM].filament[ch];
+
+    // v4.0-tpu: 若是 TPU 材质，显示内部真实写死型号（如 GFU98/GFU90...）
+    if (f.filament_type == _filament_type::tpu)
+    {
+        const char* id = TPU_FIXED_ID[ch];
+        if (id && id[0]) return id;            // 如 "GFU90"
+        return "TPU?";
+    }
+    // 非 TPU：优先用 Bambu 下发的材质 id（bambubus_filament_id，如 GFG00/GFA00）
+    if (f.bambubus_filament_id[0] && f.bambubus_filament_id[1])
+    {
+        // 取后两位有意义的型号代码（GFx00 -> x00），屏宽有限，尽量短
+        // bambubus 形如 GFG00 / GFA00 / GFU98，取 "G00/A00/U98"
+        static char buf[8];
+        buf[0] = f.bambubus_filament_id[2];    // 材质字母 G/A/U...
+        buf[1] = f.bambubus_filament_id[3];    // 数字 0
+        buf[2] = f.bambubus_filament_id[4];    // 数字 0
+        buf[3] = 0;
+        if (buf[0] == 'G' && buf[1] == 'F' && buf[2] == 'G') return "PETG";
+        if (buf[0] == 'G' && buf[1] == 'F' && buf[2] == 'A') return "PLA";
+        if (buf[0] == 'A' && buf[1] == 'B' && buf[2] == 'S') return "ABS";
+        if (buf[0] == 'G' && buf[1] == 'F' && buf[2] == 'P') return "PC";
+        return buf;                            // 其它原样（如 U98）
+    }
+    // 都没有：用 name 或 unknown
+    if (f.name[0]) return f.name;
+    return "UNKN";
+}
+
+// 把 RGB 转换成肉眼易读的 3 字母颜色简写
+const char* SSD1306_OLED::color_name(uint8_t r, uint8_t g, uint8_t b)
+{
+    // 先判断灰度/黑白
+    if (r < 30 && g < 30 && b < 30) return "BLA";
+    if (r > 225 && g > 225 && b > 225) return "WHI";
+    // 主色判定（取最大分量）
+    if (r >= g && r >= b)
+    {
+        if (g > 120 && b > 120) return "ORA";   // 红+绿+蓝 -> 橙/粉
+        if (b > 120) return "PUR";              // 红+蓝 -> 紫
+        if (g > 120) return "YEL";              // 红+绿 -> 黄
+        return "RED";
+    }
+    if (g >= r && g >= b)
+    {
+        if (r > 120 && b > 120) return "CYA";   // 绿+红+蓝 -> 青
+        if (b > 120) return "CYA";              // 绿+蓝 -> 青
+        if (r > 120) return "YEL";              // 绿+红 -> 黄
+        return "GRE";
+    }
+    // 蓝色最大
+    if (r > 120 && g > 120) return "CYA";
+    if (r > 120) return "PUR";
+    if (g > 120) return "CYA";
+    return "BLU";
+}
+
+// 四通道概览页：4 行即 4 个通道（无独立表头行，避免 CH3 被挤出屏幕）。
+// 每行格式 "CHx:状态/耗材 颜色"
+//   - 通道未在线(无通道)         -> "0:ERR"
+//   - 通道在线但无料(meters<=0)  -> "0:NULL  COL"
+//   - 通道有料                  -> "0:MAT   COL"  (MAT=型号, TPU显写死型号)
+void SSD1306_OLED::draw_channels()
+{
+    if (!s_ready) return;
+
+    for (uint8_t r = 0; r < 4; r++)
+    {
+        // 整行先填空格（避免栈残留导致切页时带上其它页碎片，如 "ERR85 WHI"）
+        char line[OLED_COLS + 1u];
+        for (uint8_t i = 0; i < OLED_COLS; i++) line[i] = ' ';
+        line[OLED_COLS] = 0;
+
+        const _filament& f = ams[BAMBU_BUS_AMS_NUM].filament[r];
+
+        int n = 0;
+        line[n++] = (char)('0' + r);
+        line[n++] = ':';
+
+        if (!f.online)
+        {
+            // 无通道 / 从未被打印机设置
+            line[n++] = 'E'; line[n++] = 'R'; line[n++] = 'R';
+            // 颜色列留空（已填空格），不显示 WHI 等残留色
+        }
+        else if (f.meters <= 0.05f)
+        {
+            // 在线但无料
+            line[n++] = 'N'; line[n++] = 'U'; line[n++] = 'L'; line[n++] = 'L';
+            const char* c = color_name(f.color_R, f.color_G, f.color_B);
+            line[8] = c[0]; line[9] = c[1]; line[10] = c[2];
+        }
+        else
+        {
+            // 有料：显示型号（TPU 显写死型号，其它显材质名）
+            const char* mat = material_label(r);
+            for (int i = 0; mat[i] && n < 7; i++) line[n++] = mat[i];
+            const char* c = color_name(f.color_R, f.color_G, f.color_B);
+            line[8] = c[0]; line[9] = c[1]; line[10] = c[2];
+        }
+
+        draw_line_if_changed(r, line);   // 直接占 4 行，CH3 也能显示
+    }
+}
+
+void SSD1306_OLED::notify_action(uint8_t ch, oled_action act)
+{
+    if (!s_ready) return;                 // 无 OLED：直接返回，业务零影响
+    if (ch >= 4) return;
+    if (act == oled_action::action_none) return;
+    s_action     = act;
+    s_action_ch  = ch;
+    s_action_until_ms = time_ms64() + OLED_ACTION_HOLD_MS;
+    // 立即打断轮询，切到动作显示（下一 tick 会优先画动作）
+    s_page_next_ms = 0;
+}
+
+void SSD1306_OLED::tick(bool aht20_present, bool aht20_online,
+                        float temperature_c, float humidity_percent,
+                        bool comm_ok)
+{
+    if (!s_ready) return;                 // 无 OLED：直接返回
+
+    // 运行时掉线/热插拔检测：屏若被拔掉，ACK 丢失则复位 s_ready，
+    // 由 main 的 10s 重探逻辑重新 init 点亮（修复"开机有屏→热插拔不亮"）。
+    if (!probe_ack())
+    {
+        s_ready = false;
+        return;
+    }
+
+    const uint64_t now = time_ms64();
+
+    // ===== 1) 动作覆盖优先 =====
+    if (s_action != oled_action::action_none && now < s_action_until_ms)
+    {
+        char l0[OLED_COLS + 1u];
+        const char* actxt = "NONE";
+        switch (s_action)
+        {
+            case oled_action::action_load:  actxt = "LOADING";  break;  // 进料
+            case oled_action::action_unload:actxt = "UNLOAD";   break;  // 退料
+            case oled_action::action_feed:  actxt = "FEEDING";  break;  // 送料
+            case oled_action::action_idle:  actxt = "STOP";     break;  // 停止
+            default:                        actxt = "NONE";     break;
+        }
+        // 第0行："CHx LOADING"
+        int k = 0;
+        l0[k++] = 'C'; l0[k++] = 'H'; l0[k++] = (char)('0' + s_action_ch); l0[k++] = ' ';
+        for (int i = 0; actxt[i] && k < 16; i++) l0[k++] = actxt[i];
+        while (k < 16) l0[k++] = ' ';
+        l0[16] = 0;
+        draw_line_if_changed(0, l0);
+
+        // 第1行：该通道材质/型号
+        draw_line_if_changed(1, material_label(s_action_ch));
+        // 第2行：动作含义提示
+        const char* hint = "";
+        switch (s_action)
+        {
+            case oled_action::action_load:   hint = "feed in";  break;
+            case oled_action::action_unload: hint = "pull out"; break;
+            case oled_action::action_feed:   hint = "supplying";break;
+            default:                         hint = "";         break;
+        }
+        draw_line_if_changed(2, hint);
+        draw_line_if_changed(3, "");
+        return;   // 动作期间不轮询
+    }
+    // 动作结束：清动作状态，回轮询
+    if (s_action != oled_action::action_none)
+    {
+        s_action = oled_action::action_none;
+        s_action_ch = 0xFFu;
+        clear();   // 整屏清，回到轮询干净重画
+    }
+
+    // ===== 2) 页面轮询 =====
+    if (s_page_next_ms == 0u)
+    {
+        // 首次进入轮询：先启动倒计时（不切页），避免 setup 阶段耗时吃掉了
+        // 首屏 AHT20 页的停留时间，导致开机一闪就跳下一页。
+        s_page_next_ms = now + OLED_PAGE_DWELL_MS;
+    }
+    else if (now >= s_page_next_ms)
+    {
+        // 切到下一页
+        s_page = (oled_page)((uint8_t)s_page + 1u);
+        if (s_page >= oled_page::page_count) s_page = oled_page::page_aht20;
+        s_page_next_ms = now + OLED_PAGE_DWELL_MS;
+        clear();   // 切页清屏，避免残留
+    }
+
+    switch (s_page)
+    {
+        case oled_page::page_aht20:
+            draw_aht20(aht20_present, aht20_online, temperature_c, humidity_percent, comm_ok);
+            break;
+        case oled_page::page_channels:
+            draw_channels();
+            break;
+        default:
+            break;
+    }
 }
 
 #endif // BMCU_OLED
