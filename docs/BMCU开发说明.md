@@ -970,31 +970,56 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
   - `bool bus_write(uint8_t b)`：写一字节 + ACK，返回是否收到 ACK。
   - `void bus_stop()`：发停止条件。
   - 这三个函数由 `main.cpp` 以 `g_aht20.bus_start / bus_write / bus_stop` 形式调用（`g_aht20` 是 AHT20 单例），把底层软件 I2C 暴露给 OLED。
+- **屏幕对象**：`SSD1306_OLED` 单例（全局 `g_oled`），封装显存、页状态机、热插拔探测。
 - **绘制接口**：
-  - `oled_init()`：初始化 SSD1306（开显示、清屏、设扫描方向等）。
-  - `oled_update()`：把显存刷到屏上（整屏 1024 字节）。
-  - `draw_aht20(bool online, float temp, float humi)`：画 AHT20 温湿度页（第 0~1 行）。`online=false` 时显示 `AHT20 OFFLINE`，温湿度不画。
-  - 状态行（第 2 行）：用于显示 BMCU 通讯 / 通道状态，由 `main.cpp` 在刷新时填充（见 15.4）。
+  - `init()`：发 SSD1306 上电序列；先 `probe_ack()` 探测屏是否存在，成功才置 `s_ready=true`。
+  - `tick(bool comm_ok)`：主循环每 1s 调用一次。内部先 `probe_ack()` 重探——屏掉线则 `s_ready=false` 并跳过绘制（整屏不亮）；屏重新插上后 `probe_ack()` 成功自动恢复 `s_ready=true` 继续显示（**热插拔无需重启**）。随后按当前页重绘并 `oled_update()`。
+  - `probe_ack()`：仅发一次地址写探测、不修改 `s_ready` 也不清显存，用于不破坏显示的前提下判断屏是否在线。
+  - `draw_aht20(bool comm_ok, float temp, float humi, ...)`：画 AHT20 页（详见 15.4）。
+  - `draw_channels()`：画四通道概览页（详见 15.4）。
+  - `draw_action(...)`：动作覆盖页（见 15.4 动作显示）。
+- **多页轮询**：`oled_page` 枚举（`page_aht20` / `page_channels` / `page_count`），由 `tick()` 内部计时器每数秒翻一页（AHT20 页、四通道概览页循环切换），无需用户干预。
 
 ### 15.3 主循环集成（`src/main.cpp`）
 
 - OLED 相关代码全部包在 `#ifdef BMCU_OLED` 内。**不定义 `BMCU_OLED` 时，OLED 代码完全不编译、不占用 Flash/RAM**，即 OLED 是纯可选功能。
-- 初始化：通讯建立后（`comm_ok` 首次变 true 时）调用 `oled_init()` 并置 `oled_ready`。
-- 刷新：`oled_next_ms` 周期（当前 1000ms）到点后，若 `oled_ready` 则重绘并 `oled_update()`。刷新不阻塞主循环。
+- 初始化：`bambubus_init()` 在初始化阶段**标记本机 AMS 槽位在线**（`ams[slot].online = true`），使打印机后续下发的 `filament_type` / 写死型号逻辑能正确生效（否则 `set_filament` 因槽位离线而不处理材质，TPU 识别与写死表均不触发）。
+- 刷新：`g_oled.tick(comm_ok)` 每 1s 调用一次（不阻塞主循环），内部自行处理热插拔重探 + 多页轮询 + 重绘。
 - 温湿度数据取自 AHT20 主循环采样结果（`g_aht20` 的 compartment 温度/湿度），与上报给打印机的数据同源。
+- 动作覆盖：送料状态机在 `send_out` / `pulling_back` / `before_on_use` 等动作进入时，调用 `g_oled.show_action(ch, action)` 立即插队显示对应通道动作（优先级高于常规页轮询），动作结束后回到常规页轮询。
 
 ### 15.4 状态显示设计（与 RGB 联动）
 
 OLED 与 RGB 灯是**同一套状态信息的两种呈现**：不上机 / 通讯失败时 OLED 也能像 RGB 一样提示用户，不依赖打印机下发。
 
-- **通讯状态行**：显示 `LINK: OK` / `LINK: ERR`（取 `comm_ok`）。未与打印机建立通讯时显示 `ERR`，提示用户检查 RS485 连接——和 SYS_RGB 系统灯（红=掉线）逻辑一致。
-- **四通道料况（规划中）**：后续把每通道的「空 / 有料 / 当前料 / 进料中 / 推料中」显示在 OLED 上，与通道 RGB 灯含义对齐（详见 `BMCU使用指南.md` OLED 章节的显示约定）。显示内容遵循既有约定（空通道、有料、进料/推料状态用不同符号），避免整屏乱跳。
+**第 0 页 · AHT20 状态页（每轮询周期先显示）**
+| 行 | 内容 | 含义 |
+|---|---|---|
+| 行 0 | `T:23.5C H:45%`（合并一行） | AHT20 实时温湿度（原两行合并以腾出行）；未焊 AHT20 显示 `AHT20 OFFLINE` |
+| 行 1 | `COMM: OK` / `COMM: ERR` | BMCU 与打印机通讯状态（取 `comm_ok`）；未连上显示 `ERR`，提示检查 RS485，与 SYS_RGB 系统灯红=掉线逻辑一致 |
+| 行 2 | `LOCK: 98/90/95/85`（取写死型号末两位） | 编译写死的 4 通道 TPU 型号摘要；与 `BMCU_TPU_FIX0~3` 一致，肉眼确认写死表已编入。非 TPU 槽位不在此摘要强调 |
 
-> 注意：本 OLED 功能在 `dev/v4.0-tpu` 分支，首次提交前 `comm_ok=false` 的复位逻辑已恢复（干净提交），测试通讯成功状态时可临时注释该行。
+**第 1 页 · 四通道概览页**
+| 行 | 内容 | 含义 |
+|---|---|---|
+| 行 0~3 | `CH0:状态/料型 颜色` 等四行 | 每通道显示「空 / 有料 / 进料中 / 推料中」+ 当前料类型（GFUxx 或 PLA/PETG），与通道 RGB 灯含义对齐 |
 
-### 15.5 编译开关
+**动作覆盖页（临时插队）**
+当某通道进入送料动作（进料 `send_out` / 退料 `pulling_back` / 准备上料 `before_on_use`）时，OLED 立即切到该通道动作页（显示 `CHx: 进料/退料/上料`），动作结束后自动回到常规页轮询。这与 RGB 通道灯的动作/故障状态色（绿/紫闪/黄）信息同源。
 
-- `build_one.sh` 新增第 11 参数 `OLED=1`：注入 `-DBMCU_OLED`（详见 [`编译指南.md`](./编译指南.md)）。
-- 不传 `OLED=1`（默认 0）则关闭 OLED，固件与无屏版本完全一致。
+> 写死型号摘要（LOCK 行）的价值：配合 `FILAMENT_RGB_OFF` 看 RGB 灯自检内部型号时，OLED 的 LOCK 行可双重确认"编译写死型号确实编进了固件"，排查写死表不生效问题时尤其有用。
+
+### 15.5 热插拔说明（重要）
+
+早期版本 OLED 屏若开机时未插（或开机后带电拔插），因 `s_ready` 在 `init()` 发序列前定死、掉线后无代码复位重探，导致重插屏不亮。现修复为：
+- `tick()` 每 1s 调 `probe_ack()` 探测；屏掉线（`probe_ack()` 失败）即 `s_ready=false`、跳过绘制（屏熄灭）。
+- 屏重新插上后 `probe_ack()` 成功自动恢复 `s_ready=true` 继续显示；`main.cpp` 每 10s 触发 `g_oled.reinit()` 重新走一遍上电序列，确保热插拔后的屏稳定初始化。
+- **结论**：开机有没有屏都行；开机后带电拔插 OLED，拔掉会熄灭、重新插上会自动点亮，无需重启 BMCU。
+
+### 15.6 编译开关与 OLED 默认行为
+
+- **OLED 默认编入固件，无脚本开关**。`src/oled/ssd1306_oled.h` 顶部用 `#ifndef BMCU_OLED / #define BMCU_OLED / #endif` 默认定义 `BMCU_OLED`，驱动代码无条件编译进固件；运行时 `init()` 自动 `probe_ack()` 探测屏是否存在，无屏则跳过显示、零影响（详见 [`编译指南.md`](./编译指南.md) 的 `BMCU_OLED` 说明）。
+- **要彻底关闭 OLED**（剥离驱动代码、省 Flash/RAM）：直接注释掉 `ssd1306_oled.h` 顶部那 3 行宏定义即可，**不改动 `build_one.sh`、`build_all_firmwares_fast.py` 或 `platformio.ini`**。
+- 历史上 `build_one.sh` 曾用第 11 参数 `OLED=1` 注入 `-DBMCU_OLED`，现已移除：头文件侧默认开使该脚本注入无额外作用，反而容易让人误以为"默认关"。
 
 

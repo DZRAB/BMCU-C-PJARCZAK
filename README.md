@@ -81,7 +81,7 @@
   - 覆盖的送料旋钮：on_use 目标缓冲头压力带、三段式（推/等/报堵）时间窗与力度上限、回抽弹性补偿。每个 Bambu TPU 型号（GFU98/GFU00/GFU02/GFU95/GFU90/GFU85）一套独立参数，按 Shore 硬度分级，初值待实测校准。
   - **不新增固件变体**：写死型号表并入现有编译变体，固件数量不变（仍 972 / 1884），只是每个固件内置 4 通道写死表；`build_one.sh` 第 7~10 参数传型号、`build_all_firmwares_fast.py` 设环境变量 `BMCU_TPU_FIX0~3`。
 - **RGB 灯显示内部真实写死型号**：关掉"耗材颜色显示"后，通道灯按 BMCU **实际跑的写死型号**点色（如写死 90A 显示橙），肉眼知内部实际型号；非 TPU 统一白偏蓝。详见 [`rgb_led_meaning.md`](./docs/rgb_led_meaning.md) 第 2.2 节。
-- **可选 OLED 状态屏（`BMCU_OLED`）**：v4.0 新增，焊 SSD1306 OLED 复用 AHT20 软件 I2C 总线（PB10/PB11，不新增引脚），不上机也能肉眼看温湿度 / 通讯状态 / 四通道料况（与 RGB 灯同套状态信息）。编译时 `build_one.sh` 第 11 参数 `OLED=1` 启用；不启用的固件与无屏版完全一致。详见 [`BMCU使用指南.md`](./docs/BMCU使用指南.md) 第 7 章、[`BMCU开发说明.md`](./docs/BMCU开发说明.md) 第 15 章。
+- **可选 OLED 状态屏（`BMCU_OLED`）**：v4.0 新增，焊 SSD1306 OLED 复用 AHT20 软件 I2C 总线（PB10/PB11，不新增引脚），不上机也能肉眼看状态（与 RGB 灯同套状态信息）。**默认即编入固件**（`ssd1306_oled.h` 顶部 `#ifndef BMCU_OLED / #define BMCU_OLED / #endif` 默认开，运行时自动探测屏、无屏零影响）；要彻底关闭只需注释头文件顶部那 3 行宏，不改编译脚本。**多页自动轮询**：第 0 页 AHT20 温湿度（合并一行）+ `COMM: OK/ERR` 通讯状态 + `LOCK: 98/90/95/85` 编译写死 TPU 型号摘要；第 1 页四通道概览（空/有料/进料/推料 + 料型，与 RGB 灯对齐）；进料/退料/上料时插队显示对应通道动作。已修复**热插拔**：开机插不插都行，带电拔插会自动熄灭/点亮无需重启。详见 [`BMCU使用指南.md`](./docs/BMCU使用指南.md) 第 7 章、[`BMCU开发说明.md`](./docs/BMCU开发说明.md) 第 15 章。
 - **版本号**：上报号保持 `10.50.00.00` 不变（兼容打印机），本仓库版本更迭用 git 标签区分（如 `v4.0-tpu`）。
 - **代码位置**：参数表 [`src/tpu_params.h`](./src/tpu_params.h)，材质解析 [`src/bambu_bus_ams.cpp`](./src/bambu_bus_ams.cpp)，送料闭环接入 [`src/Motion_control.cpp`](./src/Motion_control.cpp)，OLED 驱动 [`src/oled/ssd1306_oled.cpp`](./src/oled/ssd1306_oled.cpp)。
 - **编译**：见 [`编译指南.md`](./docs/编译指南.md)。

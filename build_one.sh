@@ -19,6 +19,8 @@
 #   TPU0..3  (可选) 各通道 Bambu filament_id 写死型号（GFU98/GFU00/GFU02/GFU95/GFU90/GFU85）。固件内置 TPU 逻辑，
 #            仅当打印机将该通道设为 TPU for AMS(GFU98) 时生效，内部用写死型号跑；不提供则全部保底 GFU85。
 #            与普通固件数量一致，不新增变体维度。
+#   OLED     （无脚本开关）默认编入固件（src/oled/ssd1306_oled.h 顶部宏默认开，运行时自动探测屏、无屏零影响）。
+#            如需彻底关闭 OLED 以省 Flash/RAM，注释掉 ssd1306_oled.h 顶部 #define BMCU_OLED 那 3 行即可，不改动本脚本。
 #
 # 示例：
 #   bash build_one.sh standard 1 1 SOLO            # 双开关自动回抽 -> solo_2.00f_auto.bin
@@ -45,9 +47,13 @@ TPU_FIX0="${7:-GFU85}"
 TPU_FIX1="${8:-GFU85}"
 TPU_FIX2="${9:-GFU85}"
 TPU_FIX3="${10:-GFU85}"
-# OLED 显示开关（第 11 位置参数），缺省 0=关闭。开启后注入 -DBMCU_OLED，
-# 整个 OLED 驱动被 #ifdef BMCU_OLED 包住，常态固件零影响。
-OLED="${11:-0}"
+# 注意：OLED 开关不在本脚本处理。
+# OLED 驱动默认即在固件中（见 src/oled/ssd1306_oled.h 顶部
+#   #ifndef BMCU_OLED / #define BMCU_OLED / #endif
+# 默认定义 BMCU_OLED，驱动无条件编入；运行时自动探测屏是否存在，无屏零影响）。
+# 若要彻底关闭 OLED（剥离驱动代码、省 Flash/RAM），直接注释掉
+# ssd1306_oled.h 顶部那 3 行宏定义即可，无需改本脚本或 platformio.ini。
+# 历史上曾有 -DBMCU_OLED 注入开关，现已移除：头文件侧默认开，脚本注入无额外作用。
 
 # --- 模式映射 ---
 case "${MODE}" in
@@ -121,12 +127,9 @@ pio_env+=( BMCU_ONLINE_LED_FILAMENT_RGB="${RGB}" )
 pio_env+=( DBMCU_P1S="${p1s}" )
 pio_env+=( BMCU_SOFT_LOAD="${softload}" )
 pio_env+=( BMCU_DM_AUTO_RETRACT="${AUTO_RETRACT_FLAG}" )
-# OLED 显示：OLED=1 时注入 -DBMCU_OLED；否则置空，驱动代码整体被 #ifdef 剥掉。
-OLED_FLAG=""
-if [[ "${OLED}" == "1" ]]; then
-  OLED_FLAG="-DBMCU_OLED "
-fi
-pio_env+=( PLATFORMIO_BUILD_FLAGS="${OLED_FLAG}-DBMCU_TPU_FIX0=${TPU_FIX0} -DBMCU_TPU_FIX1=${TPU_FIX1} -DBMCU_TPU_FIX2=${TPU_FIX2} -DBMCU_TPU_FIX3=${TPU_FIX3}" )
+# OLED 显示：默认编入固件（由 ssd1306_oled.h 顶部宏控制，无需脚本注入）。
+# 因此 PLATFORMIO_BUILD_FLAGS 只注入 TPU 写死型号表，不含 OLED 开关。
+pio_env+=( PLATFORMIO_BUILD_FLAGS="-DBMCU_TPU_FIX0=${TPU_FIX0} -DBMCU_TPU_FIX1=${TPU_FIX1} -DBMCU_TPU_FIX2=${TPU_FIX2} -DBMCU_TPU_FIX3=${TPU_FIX3}" )
 
 env "${pio_env[@]}" pio run -e fw
 
