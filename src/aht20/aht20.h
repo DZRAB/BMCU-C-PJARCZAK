@@ -41,6 +41,13 @@ public:
     float temperature_c    = 0.0f;  // 最近一次温度 ℃
     float humidity_percent = 0.0f;  // 最近一次湿度 %
 
+    // ===== 软件 I2C 总线对外转发（仅供同总线设备如 OLED 复用，不破坏 AHT20 私有逻辑）=====
+    // OLED 复用 AHT20 已验证稳定的软件 I2C 时序（CH32V203 上自写时序不稳，故复用）。
+    // 调用前必须保证本对象已 init()（引脚已配置为 PB10/PB11 开漏）。
+    inline void bus_start()        { iic_start(); }
+    inline bool bus_write(uint8_t b) { return iic_write_byte(b); }   // 返回 true=ACK
+    inline void bus_stop()         { iic_stop(); }
+
 private:
     // 注意：GPIOx 是 reinterpret_cast 宏，不能用于 constexpr，故用普通 static 成员
     static GPIO_TypeDef* const IIC_PORT_SCL;

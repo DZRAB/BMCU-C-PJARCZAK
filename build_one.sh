@@ -45,6 +45,9 @@ TPU_FIX0="${7:-GFU85}"
 TPU_FIX1="${8:-GFU85}"
 TPU_FIX2="${9:-GFU85}"
 TPU_FIX3="${10:-GFU85}"
+# OLED 显示开关（第 11 位置参数），缺省 0=关闭。开启后注入 -DBMCU_OLED，
+# 整个 OLED 驱动被 #ifdef BMCU_OLED 包住，常态固件零影响。
+OLED="${11:-0}"
 
 # --- 模式映射 ---
 case "${MODE}" in
@@ -118,7 +121,12 @@ pio_env+=( BMCU_ONLINE_LED_FILAMENT_RGB="${RGB}" )
 pio_env+=( DBMCU_P1S="${p1s}" )
 pio_env+=( BMCU_SOFT_LOAD="${softload}" )
 pio_env+=( BMCU_DM_AUTO_RETRACT="${AUTO_RETRACT_FLAG}" )
-pio_env+=( PLATFORMIO_BUILD_FLAGS="-DBMCU_TPU_FIX0=${TPU_FIX0} -DBMCU_TPU_FIX1=${TPU_FIX1} -DBMCU_TPU_FIX2=${TPU_FIX2} -DBMCU_TPU_FIX3=${TPU_FIX3}" )
+# OLED 显示：OLED=1 时注入 -DBMCU_OLED；否则置空，驱动代码整体被 #ifdef 剥掉。
+OLED_FLAG=""
+if [[ "${OLED}" == "1" ]]; then
+  OLED_FLAG="-DBMCU_OLED "
+fi
+pio_env+=( PLATFORMIO_BUILD_FLAGS="${OLED_FLAG}-DBMCU_TPU_FIX0=${TPU_FIX0} -DBMCU_TPU_FIX1=${TPU_FIX1} -DBMCU_TPU_FIX2=${TPU_FIX2} -DBMCU_TPU_FIX3=${TPU_FIX3}" )
 
 env "${pio_env[@]}" pio run -e fw
 

@@ -49,27 +49,28 @@ soft_load(A1)
 
 ==========================================================================
 
-[TPU 专用固件] 最外层目录不再是推力模式，而是 TPU 型号
+[TPU 软料送料] 固件仍按推力模式三选一，TPU 逻辑已内置
 
-v4.0-tpu 引入「通用固件 + 专用固件」双轨：
+v4.0-tpu 已**取消"TPU 专用固件"概念**：所有固件（通用固件）都**无条件内置 TPU 软料
+送料逻辑**，不再区分通用/专用、不再有 BMCU_TPU_MODEL 分支、不再有 firmwares-tpu 目录。
+最外层目录仍是上面的 soft_load(A1) / standard(A1) / high_force_load(P1S) 三选一；
+固件内含完整 TPU 参数表，运行时按通道识别 TPU 自动调整送料推力（无任何通道为 TPU 时
+行为与原 v3.2 零差异）。
 
-- 通用固件（默认，不设 BMCU_TPU_MODEL）：最外层仍是上面的
-  soft_load(A1) / standard(A1) / high_force_load(P1S) 三选一；固件内含完整 TPU
-  参数表，运行时按通道识别 TPU 自动调整送料推力（无任何通道为 TPU 时行为与原 v3.2 零差异）。
-- 专用固件（设 BMCU_TPU_MODEL=GFUxx）：最外层目录是 TPU 型号（GFU98 / GFU00 /
-  GFU02 / GFU95 / GFU90 / GFU85），不再区分三种推力模式——该型号的送料推力已在
-  固件内按硬度固化。适用于不支持下发材料型号的打印机。
+为什么还要"写死型号"（BMCU_TPU_FIX0~3）？
+Bambu 打印机只允许设置 TPU for AMS（GFU98），其它 TPU 型号（95A/90A/85A 等）被拒设置，
+BMCU 收不到对应 filament_id、TPU 参数不生效。解决：编译时用 BMCU_TPU_FIX0~3 给 4 通道
+分别写死型号（缺省全 GFU85 最软最稳），写死表并入现有变体、不新增固件数；运行时某
+通道被设为 GFU98 时内部用写死型号跑、回传仍 GFU98（不骗打印机、循环不触发）。详见发布说明。
 
-选哪个型号（专用固件）？
+选哪个写死型号（BMCU_TPU_FIX0~3）？
 - GFU98 / GFU02：约 68D 硬 TPU，最接近刚性料手感（AMS 常规供料）。
 - GFU00 / GFU95：95A TPU（需 AMS HT 手动进料）。
 - GFU90：90A TPU（需 AMS HT 手动进料）。
 - GFU85：85A 极软 TPU（禁用 PTFE 管，全程最保守防啃防误报）。
 - 不确定硬度时，选更软一档更稳妥（推力更小、避让更宽容，最坏是多推一会儿）。
 
-专用固件产物在独立的 firmwares-tpu/ 目录下，不污染常规 firmwares/ 矩阵。
-
-无论通用还是专用固件，都可用「FILAMENT_RGB_OFF + 看 LED 识别色」来肉眼验证程序
+无论哪个固件，都可用「FILAMENT_RGB_OFF + 看 LED 识别色」来肉眼验证程序
 是否真正识别到 TPU（GFUxx 各型号显示不同纯色，非 TPU 统一一种色，详见
 which_to_choose_filament_rgb.txt 的 TPU 识别色对照表）。
 

@@ -10,6 +10,7 @@
 #include "ADC_DMA.h"
 #include "Debug_log.h"
 #include "aht20/aht20.h"
+#include "oled/ssd1306_oled.h"   // OLED 驱动（BMCU_OLED 宏包住，默认不编译）
 #include "sim_aht20.h"
 #include "hal/time_hw.h"
 #include <string.h>
@@ -17,7 +18,7 @@
 WS2812_class SYS_RGB;
 WS2812_class RGBOUT[4];
 
-static AHT20 g_aht20;
+AHT20 g_aht20;   // 全局可见：OLED 同总线设备需复用其软件 I2C 底层
 
 void RGB_init()
 {
@@ -222,6 +223,15 @@ int main(void)
     MC_PULL_calibration_boot();
     ams_datas_read();
 
+#ifdef BMCU_OLED
+    // OLED 初始化：复用 AHT20 总线（引脚已在 g_aht20.init() 配置）。
+    // AHT20 采样照常进行，不被屏蔽；OLED 仅在其 init 后读取温湿度显示。
+    SSD1306_OLED::init();
+    SSD1306_OLED::draw_aht20(g_aht20.is_online(),
+                             g_aht20.temperature_c,
+                             g_aht20.humidity_percent);
+#endif // BMCU_OLED
+
     {
         uint8_t ch = 0xFFu;
         if (Flash_AMS_state_read(&ch))
@@ -363,6 +373,24 @@ int main(void)
         // 探测模式下温湿度由 bambu_bus_ams.cpp 在每次响应打印机查询时
         // 调用 sim_aht20_probe_step() 自增；无需在此周期调用。
         // AHT20 实物到位后改用真实传感器，本模拟整体停用。
+
+#ifdef BMCU_OLED
+        // ===== OLED 显示（复用 AHT20 软件 I2C 总线）=====
+        // 独立于 AHT20 采样临界区：上面采样块已完成 get_measure，此处只读取
+        // g_aht20.temperature_c / humidity_percent 并刷新屏幕，不触发 AHT20 测量，
+        // 因此不会打断 AHT20 的 I2C 时序。1 秒刷新一次。
+        {
+            static uint64_t oled_next_ms = 0;
+            const uint64_t now_ms = time_ms64();
+            if ((now_ms - oled_next_ms) >= 1000u)
+            {
+                oled_next_ms = now_ms;
+                SSD1306_OLED::draw_aht20(g_aht20.is_online(),
+                                         g_aht20.temperature_c,
+                                         g_aht20.humidity_percent);
+            }
+        }
+#endif // BMCU_OLED
 
         Motion_control_run(error);
         RGB_update();
