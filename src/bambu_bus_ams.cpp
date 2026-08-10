@@ -14,6 +14,13 @@ uint8_t bambubus_ams_map[4] = {0, 1, 2, 3};
 static void bambubus_build_static_serial(void);
 static uint32_t bambubus_heartbeat_deadline = 0u;
 
+// ===== 通讯监控统计（供 OLED 调试页读取，对业务零影响）=====
+// 这些计数器只在解析成功时自增，用于观察 BMCU<->打印机 通讯是否漏包/是否收到设料指令。
+uint32_t g_pkg_recv_cnt   = 0u;   // 成功解析的打印机包总数（持续增长=没漏包）
+uint32_t g_set_filament_cnt = 0u; // set_filament 被调用次数（打印机下发设料指令计数）
+char     g_last_filament_id[8] = {0}; // 最近一次收到的 filament_id（如 "GFU98"），未收到则为空
+uint64_t g_last_pkg_ms   = 0u;   // 最近一次成功收包的时间戳（ms）
+
 // v4.0-tpu: 由 Bambu filament_id（tray_info_idx）前缀判定材质类型。
 // 编码规则（Bambu Studio DeviceManager.cpp 证实，与打印机固件表一致）：
 //   GFA** = PLA, GFG** = PETG, GFB** = ABS, GFL** = PA, GFU** = TPU（软料）
@@ -1165,6 +1172,11 @@ void get_package_set_filament(unsigned char *buf, int length)
 
     _ams *ams_ptr = ams + bambubus_ams_map[fixed_ams_num];
     memcpy(ams_ptr->filament[read_num].bambubus_filament_id, buf + 7, sizeof(ams_ptr->filament[read_num].bambubus_filament_id));
+
+    // 通讯监控：记录 set_filament 调用次数 + 最近收到 filament_id
+    g_set_filament_cnt++;
+    memcpy(g_last_filament_id, ams_ptr->filament[read_num].bambubus_filament_id,
+           sizeof(ams_ptr->filament[read_num].bambubus_filament_id));
     ams_ptr->filament[read_num].filament_type = bambubus_filament_id_to_type(ams_ptr->filament[read_num].bambubus_filament_id);
     ams_ptr->filament[read_num].tpu_model = tpu_param_fixed(read_num)->model; // v4.0-tpu: 记录写死表真实型号供 RGB 用（肉眼知内部实际型号）
     ams_ptr->filament[read_num].color_R = buf[15];
@@ -1197,6 +1209,11 @@ void get_package_set_filament_type2(unsigned char *buf, int length)
 
     memcpy(ams_ptr->filament[read_num].bambubus_filament_id,
            printer_data_long.datas + 2,
+           sizeof(ams_ptr->filament[read_num].bambubus_filament_id));
+
+    // 通讯监控：记录 set_filament 调用次数 + 最近收到 filament_id
+    g_set_filament_cnt++;
+    memcpy(g_last_filament_id, ams_ptr->filament[read_num].bambubus_filament_id,
            sizeof(ams_ptr->filament[read_num].bambubus_filament_id));
     ams_ptr->filament[read_num].filament_type = bambubus_filament_id_to_type(ams_ptr->filament[read_num].bambubus_filament_id);
     ams_ptr->filament[read_num].tpu_model = tpu_param_fixed(read_num)->model; // v4.0-tpu: 记录写死表真实型号供 RGB 用（肉眼知内部实际型号）
@@ -1251,6 +1268,10 @@ bambubus_package_type bambubus_run()
         if (buf != nullptr && rx_len <= 1280 && buf[0] == 0x3D)
         {
             const int len = rx_len;
+
+            // 通讯监控：每成功解析一个合法打印机包，计数 + 记录时间戳
+            g_pkg_recv_cnt++;
+            g_last_pkg_ms = time_ms64();
 
             stu = get_packge_type(buf, len);
 

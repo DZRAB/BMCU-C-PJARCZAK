@@ -1,5 +1,7 @@
 // SSD1306 OLED（128x64, I2C, 4引脚）驱动 —— 软件 I2C 复用 AHT20 总线
 //
+#include "bambu_bus_ams.h"   // 通讯监控：读取 g_pkg_recv_cnt / g_set_filament_cnt / g_last_filament_id
+//
 // 设计要点：
 //  - OLED 与 AHT20 共用同一条软件 I2C 总线（PB10/SCL, PB11/SDA），地址不同不冲突。
 //  - 底层软件 I2C 时序【复用 AHT20 已验证稳定的 bus_start/bus_write/bus_stop】，
@@ -507,18 +509,72 @@ void SSD1306_OLED::draw_channels()
         }
         else
         {
-            // [DEBUG] 临时显示运行时 filament_type 与 tpu_model 枚举值，定位写死表是否生效
-            // 格式: "T<type>F<model>"  type:5=tpu  model:0=UNK 1=98 2=00 3=02 4=95 5=90 6=85
-            line[n++] = 'T';
-            line[n++] = (char)('0' + (int)f.filament_type);
-            line[n++] = 'F';
-            line[n++] = (char)('0' + (int)f.tpu_model);
+            // 有料：显示型号（TPU 显写死型号，其它显材质名）
+            const char* mat = material_label(r);
+            for (int i = 0; mat[i] && n < 7; i++) line[n++] = mat[i];
             const char* c = color_name(f.color_R, f.color_G, f.color_B);
             line[8] = c[0]; line[9] = c[1]; line[10] = c[2];
         }
 
         draw_line_if_changed(r, line);   // 直接占 4 行，CH3 也能显示
     }
+}
+
+// 通讯监控页：4 行
+//   COMM OK / ERR      通讯状态（comm_ok）
+//   PKG 123456         总收包计数（持续增长=没漏包）
+//   SET 000123         set_filament 调用次数（打印机下发设料计数）
+//   ID  GFU98          最近收到的 filament_id（未收到则 "---"）
+void SSD1306_OLED::draw_comm(bool comm_ok)
+{
+    char l0[OLED_COLS + 1u];
+    int k = 0;
+    const char* cstat = comm_ok ? "OK" : "ERR";
+    l0[k++] = 'C'; l0[k++] = 'O'; l0[k++] = 'M'; l0[k++] = 'M'; l0[k++] = ' ';
+    l0[k++] = cstat[0]; l0[k++] = cstat[1];
+    while (k < 16) l0[k++] = ' ';
+    l0[16] = 0;
+    draw_line_if_changed(0, l0);
+
+    char l1[OLED_COLS + 1u];
+    k = 0;
+    l1[k++] = 'P'; l1[k++] = 'K'; l1[k++] = 'G'; l1[k++] = ' ';
+    // 右对齐 6 位十进制
+    char num[12]; int ni = 0;
+    uint32_t v = g_pkg_recv_cnt;
+    if (v == 0) num[ni++] = '0';
+    while (v > 0) { num[ni++] = (char)('0' + (v % 10)); v /= 10; }
+    for (int i = ni - 1; i >= 0; i--) { if (k < 14) l1[k++] = num[i]; }
+    while (k < 16) l1[k++] = ' ';
+    l1[16] = 0;
+    draw_line_if_changed(1, l1);
+
+    char l2[OLED_COLS + 1u];
+    k = 0;
+    l2[k++] = 'S'; l2[k++] = 'E'; l2[k++] = 'T'; l2[k++] = ' ';
+    v = g_set_filament_cnt;
+    ni = 0;
+    if (v == 0) num[ni++] = '0';
+    while (v > 0) { num[ni++] = (char)('0' + (v % 10)); v /= 10; }
+    for (int i = ni - 1; i >= 0; i--) { if (k < 14) l2[k++] = num[i]; }
+    while (k < 16) l2[k++] = ' ';
+    l2[16] = 0;
+    draw_line_if_changed(2, l2);
+
+    char l3[OLED_COLS + 1u];
+    k = 0;
+    l3[k++] = 'I'; l3[k++] = 'D'; l3[k++] = ' ';
+    if (g_last_filament_id[0] != 0)
+    {
+        for (int i = 0; g_last_filament_id[i] && k < 15; i++) l3[k++] = g_last_filament_id[i];
+    }
+    else
+    {
+        l3[k++] = '-'; l3[k++] = '-'; l3[k++] = '-';
+    }
+    while (k < 16) l3[k++] = ' ';
+    l3[16] = 0;
+    draw_line_if_changed(3, l3);
 }
 
 void SSD1306_OLED::notify_action(uint8_t ch, oled_action act)
@@ -616,6 +672,9 @@ void SSD1306_OLED::tick(bool aht20_present, bool aht20_online,
             break;
         case oled_page::page_channels:
             draw_channels();
+            break;
+        case oled_page::page_comm:
+            draw_comm(comm_ok);
             break;
         default:
             break;

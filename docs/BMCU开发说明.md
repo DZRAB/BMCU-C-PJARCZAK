@@ -669,6 +669,10 @@ TPU 软、弹性大，缓冲头确实比硬料更难被硬顶满；但这不意�
 - 在两处材料下发回调（`set_filament`、`set_filament_type2`）写入 `filament[ch].filament_type`；
   若为 TPU，则把 `filament[ch].tpu_model` 设为**该通道写死型号** `tpu_param_fixed(ch)->model`（忽略下发的 `GFU98`）。
   这正是「装料下发 → 识别 TPU → 走写死型号参数」的触发点，也为 RGB 识别色提供**真实内部型号**来源。
+- 新增**通讯监控统计（供 OLED 调试页，对业务零影响）**：`g_pkg_recv_cnt`（收包分发入口每成功解析一包 +1）、
+  `g_set_filament_cnt`（两处 `set_filament` 各 +1）、`g_last_filament_id[8]`（记录最近收到 `filament_id`）、
+  `g_last_pkg_ms`（最近收包时间戳）。这四个变量在 `bambu_bus_ams.cpp` 顶部定义、头文件 `extern` 暴露，
+  OLED 通讯监控页（`draw_comm`）只读显示，不参与任何控制逻辑。
 
 **修改 `src/Motion_control.cpp`（on_use 闭环接入 TPU 参数）**
 - `MC_PULL_ONLINE_RGB_set` 调用处（`run()` 内 RGB 刷新分支）新增 v4.0-tpu 识别色逻辑：
@@ -977,8 +981,9 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
   - `probe_ack()`：仅发一次地址写探测、不修改 `s_ready` 也不清显存，用于不破坏显示的前提下判断屏是否在线。
   - `draw_aht20(bool comm_ok, float temp, float humi, ...)`：画 AHT20 页（详见 15.4）。
   - `draw_channels()`：画四通道概览页（详见 15.4）。
+  - `draw_comm(bool comm_ok)`：画通讯监控页（详见 15.4）。
   - `draw_action(...)`：动作覆盖页（见 15.4 动作显示）。
-- **多页轮询**：`oled_page` 枚举（`page_aht20` / `page_channels` / `page_count`），由 `tick()` 内部计时器每数秒翻一页（AHT20 页、四通道概览页循环切换），无需用户干预。
+- **多页轮询**：`oled_page` 枚举（`page_aht20` / `page_channels` / `page_comm` / `page_count`），由 `tick()` 内部计时器每数秒翻一页（AHT20 页 → 四通道概览页 → 通讯监控页 循环切换），无需用户干预。
 
 ### 15.3 主循环集成（`src/main.cpp`）
 
@@ -1003,6 +1008,22 @@ OLED 与 RGB 灯是**同一套状态信息的两种呈现**：不上机 / 通讯
 | 行 | 内容 | 含义 |
 |---|---|---|
 | 行 0~3 | `CH0:状态/料型 颜色` 等四行 | 每通道显示「空 / 有料 / 进料中 / 推料中」+ 当前料类型（GFUxx 或 PLA/PETG），与通道 RGB 灯含义对齐 |
+
+**第 2 页 · 通讯监控页（v4.0-tpu 调试新增）**
+本页用于**在线观察 BMCU 与打印机的通讯是否正常、是否收到设料指令**，排查「设置不了 TPU for AMS」「写死表没生效」等问题时尤为关键。统计变量在 `bambu_bus_ams.cpp` 顶部分别在「收包分发入口」与「两处 `set_filament` 回调」自增/记录，对业务零影响，仅暴露给 OLED 读取。
+
+| 行 | 内容 | 含义 |
+|---|---|---|
+| 行 0 | `COMM OK` / `COMM ERR` | 通讯状态（取 `comm_ok`，与 AHT20 页的 COMM 同源） |
+| 行 1 | `PKG 123456` | `g_pkg_recv_cnt`：成功解析的打印机包总数。**持续增长 = 没漏包**；长时间不增长 = 收包链路断（接线/波特率/地址） |
+| 行 2 | `SET 000123` | `g_set_filament_cnt`：`set_filament` 被调用次数（打印机下发设料指令计数）。设料时 +1 |
+| 行 3 | `ID GFU98` | `g_last_filament_id`：最近一次收到的 `filament_id`。**设 TPU for AMS 时应显示 `GFU98`**；未收到设料显示 `---` |
+
+**排查用法**（设料时盯此页）：
+- `PKG` 不增长 → 通讯根本没收到包（漏包/接线/波特率），先查物理层。
+- `PKG` 增长但 `SET` 不 +1 → 打印机没下发 `set_filament`（或 `ams_num` 不匹配被早退拦截），BMCU 收不到设料指令。
+- `SET` +1 但 `ID` 不是 `GFU98` → 打印机下发的不是 TPU for AMS 料号（下发的料号本身不带 TPU 标记），BMCU 不会走写死 TPU 分支。
+- `ID` 是 `GFU98` 且 `SET` +1，但 RGB 灯仍不对 → 写死表/显示链路问题（已非通讯层）。
 
 **动作覆盖页（临时插队）**
 当某通道进入送料动作（进料 `send_out` / 退料 `pulling_back` / 准备上料 `before_on_use`）时，OLED 立即切到该通道动作页（显示 `CHx: 进料/退料/上料`），动作结束后自动回到常规页轮询。这与 RGB 通道灯的动作/故障状态色（绿/紫闪/黄）信息同源。

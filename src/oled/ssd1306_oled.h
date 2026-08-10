@@ -110,6 +110,7 @@ public:
     {
         page_aht20 = 0,   // 温湿度（含写死 TPU 摘要）
         page_channels,    // 四通道概览（材质/颜色/有无料/运动态）
+        page_comm,        // 通讯监控（BMCU<->打印机 收包/设料统计）
         page_count
     };
 
@@ -136,6 +137,9 @@ public:
 
     // 四通道概览页：每行一个通道，显示 [材质/颜色/有无料/运动态]。
     static void draw_channels();
+
+    // 通讯监控页：显示 BMCU<->打印机 通讯统计（COMM 状态/总收包/设料次数/最近料号）。
+    static void draw_comm(bool comm_ok);
 
     // 把 RGB 转成 3 字母颜色简写（RED/GRE/YEL/BLU/CYA/MAG/PUR/ORA/WHI/BLA）。
     static const char* color_name(uint8_t r, uint8_t g, uint8_t b);
