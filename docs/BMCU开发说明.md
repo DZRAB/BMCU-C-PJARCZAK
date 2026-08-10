@@ -1045,4 +1045,74 @@ OLED 与 RGB 灯是**同一套状态信息的两种呈现**：不上机 / 通讯
 - **要彻底关闭 OLED**（剥离驱动代码、省 Flash/RAM）：直接注释掉 `ssd1306_oled.h` 顶部那 3 行宏定义即可，**不改动 `build_one.sh`、`build_all_firmwares_fast.py` 或 `platformio.ini`**。
 - 历史上 `build_one.sh` 曾用第 11 参数 `OLED=1` 注入 `-DBMCU_OLED`，现已移除：头文件侧默认开使该脚本注入无额外作用，反而容易让人误以为"默认关"。
 
+## 16. 编译参数总表与手动开关清单（v4.0-tpu）
+
+> 本章汇总"当前怎么编固件"，避免参数混乱。所有编译宏**一律通过脚本注入，绝不修改 `platformio.ini`**（项目硬规则）。
+
+### 16.1 单编脚本 `build_one.sh`（位置参数，可省略后面的）
+
+```
+bash build_one.sh <MODE> <AUTOLOAD> <RGB> <SLOT> [RETRACT] [AUTO_RETRACT] [TPU0 TPU1 TPU2 TPU3]
+```
+
+| 位置 | 参数 | 取值 | 默认 | 说明 |
+|---|---|---|---|---|
+| 1 | `MODE` | `standard` / `p1s` / `softload` | `standard` | 推力模式；`softload`=软加载版 |
+| 2 | `AUTOLOAD` | `1` / `0` | `1` | 双微动开关板=1；单开关板=0（固定回抽长度） |
+| 3 | `RGB` | `1` / `0` | `1` | `BMCU_ONLINE_LED_FILAMENT_RGB`，ONLINE LED 显耗材色 |
+| 4 | `SLOT` | `SOLO` / `A` / `B` / `C` / `D` | `SOLO` | AMS 槽位（`SOLO` 与 `A` 同为 `ams_num=0`） |
+| 5 | `RETRACT` | 米（如 `0.30`） | `SOLO=0.095`；双开关自动回抽时忽略 | `AMS_RETRACT_LEN` |
+| 6 | `AUTO_RETRACT` | `1` / `0` | `1` | 仅双开关想走固定长度回抽才设 `0` |
+| 7~10 | `TPU0`~`TPU3` | `GFU98/GFU00/GFU02/GFU95/GFU90/GFU85` | 全 `GFU85` | 4 通道**写死型号表**（`BMCU_TPU_FIX0~3`） |
+
+示例（4 通道分别写死 98/90/95/85）：
+```
+bash build_one.sh standard 1 1 SOLO 0.095 1 GFU98 GFU90 GFU95 GFU85
+```
+
+### 16.2 批量脚本 `build_all_firmwares_fast.py`（环境变量）
+
+```
+AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_TPU_FIX3=GFU85 python build_all_firmwares_fast.py
+```
+
+| 环境变量 | 取值 | 默认 | 说明 |
+|---|---|---|---|
+| `AUTO_RETRACT` | `1` / `0` | `1` | 默认自动回抽（972 个固件）；设 `0`=固定长度（1884 个） |
+| `BMCU_TPU_FIX0`~`BMCU_TPU_FIX3` | `GFUxx` | 全 `GFU85` | 4 通道写死型号 |
+
+> ⚠️ **批量脚本的写死表不参与"变体分类/构建缓存 key"**：所有生成的固件使用**同一组**写死型号（由这 4 个环境变量决定）。本脚本即"全量统一写死表"用途，不会为不同写死组合分别产出/缓存。若需不同通道组合各编一份，请改用 `build_one.sh` 多次单编。
+
+### 16.3 必须手动改源码的开关（仅 2 处）
+
+其余所有宏都由脚本注入，**不用改程序**。只有以下 2 处需手动编辑源码（且都不碰 `platformio.ini`）：
+
+1. **OLED 总开关** — `src/oled/ssd1306_oled.h` 第 37-38 行
+   ```c
+   #ifndef BMCU_OLED
+   #define BMCU_OLED   // ← 注释掉这 3 行即可彻底关闭 OLED 驱动（省 Flash/RAM）
+   #endif
+   ```
+   默认开；想省空间或确认无屏时注释掉即可。
+
+2. **OLED 调试页开关** — `src/oled/ssd1306_oled.cpp` 的 `tick()` 开头
+   ```cpp
+   if (true) { draw_comm(comm_ok); return; }   // ← 排查通讯时临时加；测完必须改回 if(false) 或删除
+   ```
+   加上后 OLED 只显通讯监控页；**发布/正常用前务必改回 `if (false)` 或删掉**，否则永远看不到其它页。
+
+### 16.4 编译宏一览（均由脚本注入，勿手改）
+
+| 宏 | 来源 | 作用 |
+|---|---|---|
+| `BAMBU_BUS_AMS_NUM` | `build_one.sh` 参数 4 `SLOT` | 本 BMCU 占的 AMS 槽位号（设料 `ams_num` 匹配判定） |
+| `AMS_RETRACT_LEN` | `build_one.sh` 参数 5 `RETRACT` | 回抽长度（双开关自动回抽时忽略） |
+| `BMCU_DM_TWO_MICROSWITCH` | 参数 2 `AUTOLOAD` | 双开关板=1 / 单开关=0 |
+| `BMCU_ONLINE_LED_FILAMENT_RGB` | 参数 3 `RGB` | ONLINE LED 显耗材色 |
+| `DBMCU_P1S` / `BMCU_SOFT_LOAD` | 参数 1 `MODE` | P1S / 软加载模式 |
+| `BMCU_DM_AUTO_RETRACT` | 参数 6 `AUTO_RETRACT` | 固定长度回抽（默认随双开关派生） |
+| `BMCU_TPU_FIX0~3` | 参数 7~10 / 环境变量 | 4 通道写死型号表（缺省全 `GFU85`） |
+| `BMCU_OLED` | **头文件默认开** | OLED 驱动总开关（改头文件，非脚本注入） |
+
+
 

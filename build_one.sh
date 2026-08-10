@@ -114,7 +114,7 @@ rgb_dir=$([[ "${RGB}" == "1" ]] && echo FILAMENT_RGB_ON || echo FILAMENT_RGB_OFF
 
 out_path="single_build/${mode_dir}/${dm_dir}/${rgb_dir}/${slot_dir}/${bin_name}"
 
-echo "=== BUILD: P1S=${p1s} SOFT_LOAD=${softload} DM=${AUTOLOAD} RGB=${RGB} AMS_NUM=${ams_num} RETRACT=${RETRACT}f TPU_FIX=${TPU_FIX0},${TPU_FIX1},${TPU_FIX2},${TPU_FIX3} -> ${out_path}"
+echo "=== BUILD: P1S=${p1s} SOFT_LOAD=${softload} DM=${AUTOLOAD} RGB=${RGB} AMS_NUM=${ams_num} RETRACT=${RETRACT}f TPU_FIX[0..3]=${TPU_FIX0}/${TPU_FIX1}/${TPU_FIX2}/${TPU_FIX3} -> ${out_path}"
 
 # v4.0-tpu: 通用固件内置 TPU 逻辑，无条件注入 4 通道写死型号宏（缺省 GFU85）。
 # 通过 PLATFORMIO_BUILD_FLAGS 环境变量注入（PlatformIO 自动追加到所有环境 build_flags），

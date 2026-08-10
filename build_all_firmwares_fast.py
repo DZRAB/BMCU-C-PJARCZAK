@@ -40,6 +40,8 @@ OUT_DIR = "firmwares"
 
 # v4.0-tpu: 通用固件内置 TPU 逻辑，4 通道编译期写死型号由环境变量决定（缺省 GFU85）。
 # 不新增变体维度：写死宏无条件注入所有固件，输出仍进常规 firmwares/。
+# 注意：写死表不参与"变体分类/构建缓存 key"（VARIANT_MACROS 不含 BMCU_TPU_FIX*），
+#       所有批量固件使用同一组写死型号——本脚本即"全量统一写死表"用途。
 TPU_FIX = [os.environ.get(f"BMCU_TPU_FIX{i}", "GFU85").strip() or "GFU85" for i in range(4)]
 OUT_ROOT = OUT_DIR
 PIO_ENV = "fw"
