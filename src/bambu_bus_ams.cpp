@@ -24,8 +24,9 @@ uint64_t g_last_pkg_ms   = 0u;   // 最近一次成功收包的时间戳（ms）
 // v4.0-tpu: 由 Bambu filament_id（tray_info_idx）前缀判定材质类型。
 // 编码规则（Bambu Studio DeviceManager.cpp 证实，与打印机固件表一致）：
 //   GFA** = PLA, GFG** = PETG, GFB** = ABS, GFL** = PA, GFU** = TPU（软料）
-// 注意：此函数只做"运行时识别"，用于 RGB/日志；送料控制由编译期
-// BMCU_TPU_MODEL 决定（见 Motion_control.cpp），两者解耦。
+// 注意：此函数只做"运行时识别"，返回 tpu/pla/... 供 Motion_control 选参数集
+// 与 RGB 识别色使用。v4.0 已无 BMCU_TPU_MODEL 专用分支，TPU 逻辑由编译期
+// 写死表 TPU_FIXED_ID[4] + 此处识别的 filament_type 共同决定（详见文档 14.4）。
 static _filament_type bambubus_filament_id_to_type(const char *id)
 {
     if (id == nullptr || id[0] == '\0' || id[0] != 'G' || id[1] != 'F')
@@ -1178,7 +1179,12 @@ void get_package_set_filament(unsigned char *buf, int length)
     memcpy(g_last_filament_id, ams_ptr->filament[read_num].bambubus_filament_id,
            sizeof(ams_ptr->filament[read_num].bambubus_filament_id));
     ams_ptr->filament[read_num].filament_type = bambubus_filament_id_to_type(ams_ptr->filament[read_num].bambubus_filament_id);
-    ams_ptr->filament[read_num].tpu_model = tpu_param_fixed(read_num)->model; // v4.0-tpu: 记录写死表真实型号供 RGB 用（肉眼知内部实际型号）
+    // v4.0-tpu: 仅当识别为 TPU（打印机下发 GFU98）才把 tpu_model 记为写死表真实型号，
+    // 供 RGB 识别色使用（肉眼知内部实际型号）。非 TPU 不污染该字段。
+    if (ams_ptr->filament[read_num].filament_type == _filament_type::tpu)
+        ams_ptr->filament[read_num].tpu_model = tpu_param_fixed(read_num)->model;
+    else
+        ams_ptr->filament[read_num].tpu_model = _tpu_model::UNKNOWN;
     ams_ptr->filament[read_num].color_R = buf[15];
     ams_ptr->filament[read_num].color_G = buf[16];
     ams_ptr->filament[read_num].color_B = buf[17];
@@ -1216,7 +1222,12 @@ void get_package_set_filament_type2(unsigned char *buf, int length)
     memcpy(g_last_filament_id, ams_ptr->filament[read_num].bambubus_filament_id,
            sizeof(ams_ptr->filament[read_num].bambubus_filament_id));
     ams_ptr->filament[read_num].filament_type = bambubus_filament_id_to_type(ams_ptr->filament[read_num].bambubus_filament_id);
-    ams_ptr->filament[read_num].tpu_model = tpu_param_fixed(read_num)->model; // v4.0-tpu: 记录写死表真实型号供 RGB 用（肉眼知内部实际型号）
+    // v4.0-tpu: 仅当识别为 TPU（打印机下发 GFU98）才把 tpu_model 记为写死表真实型号，
+    // 供 RGB 识别色使用（肉眼知内部实际型号）。非 TPU 不污染该字段。
+    if (ams_ptr->filament[read_num].filament_type == _filament_type::tpu)
+        ams_ptr->filament[read_num].tpu_model = tpu_param_fixed(read_num)->model;
+    else
+        ams_ptr->filament[read_num].tpu_model = _tpu_model::UNKNOWN;
 
     ams_ptr->filament[read_num].color_R = printer_data_long.datas[10];
     ams_ptr->filament[read_num].color_G = printer_data_long.datas[11];

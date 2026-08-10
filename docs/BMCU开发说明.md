@@ -296,6 +296,7 @@ NVM 位于 Flash 末 **4KB 扇区**（`0x0800F000`，CH32V203C8 结束于 `0x080
 | `BMCU_P1S` | P1/P1S/X1 打印机适配（更长 PTFE 路径） |
 | `BMCU_SOFT_LOAD` | soft_load(A1)：更低装入力（弱弹簧单元） |
 | `BMCU_ONLINE_LED_FILAMENT_RGB` | 装入时 ONLINE LED 显示 filament RGB 颜色 |
+| `BMCU_TPU_FIX0` ~ `BMCU_TPU_FIX3` | v4.0-tpu：4 通道**写死型号**表（如 `GFU98`/`GFU90`/`GFU95`/`GFU85`）；不定义时保底全 `GFU85`。仅当打印机下发 TPU（GFU98）时内部用写死型号送料，回传仍是 GFU98 不骗打印机（详见 14.4） |
 
 `env:fw` 通过环境变量注入上述宏；`env:moj` 为开发者默认（单 BMCU/SOLO，AMS 总线编号 0，回抽 0.095m）。
 
@@ -947,7 +948,7 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
 - 验证：编译 `build_one.sh standard 1 1 SOLO 0.30 0`（含通用 TPU 运行时识别）通过；
   上板实测 95A 应见电机间歇转动、料正常入管。
 
-> 注意：本改动在 `dev/v4.0-tpu` 分支，**本地未提交未推送**。间歇周期初值（`push_cycle_ms`/`push_on_ms`）
+> 注意：本改动已在 `dev/v4.0-tpu` 分支提交并推送（含 TPU 间歇送料、写死型号表、OLED 通讯页等）。间歇周期初值（`push_cycle_ms`/`push_on_ms`）
 > 为基于硬度的经验占位，需实测后按机型校准（越软停越久）。
 
 ---
@@ -984,6 +985,7 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
   - `draw_comm(bool comm_ok)`：画通讯监控页（详见 15.4）。
   - `draw_action(...)`：动作覆盖页（见 15.4 动作显示）。
 - **多页轮询**：`oled_page` 枚举（`page_aht20` / `page_channels` / `page_comm` / `page_count`），由 `tick()` 内部计时器每数秒翻一页（AHT20 页 → 四通道概览页 → 通讯监控页 循环切换），无需用户干预。
+  - **调试开关**：排查通讯问题时，可临时在 `tick()` 开头加 `if (true) { draw_comm(comm_ok); return; }` 强制只显通讯页（注意这是调试态，**发布前务必改回 `if (false)` 或删除**，否则 OLED 永远只显通讯页、其它页看不到）。
 
 ### 15.3 主循环集成（`src/main.cpp`）
 
