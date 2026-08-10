@@ -650,6 +650,14 @@ void SSD1306_OLED::tick(bool aht20_present, bool aht20_online,
     }
 
     // ===== 2) 页面轮询 =====
+    // [临时调试] 设 true 时 OLED 只显示通讯监控页(第3页)，方便上机盯 PKG/SET/ID。
+    // 正常发布时改为 false（或整段注释掉）。
+    if (true)
+    {
+        draw_comm(comm_ok);
+        return;
+    }
+
     if (s_page_next_ms == 0u)
     {
         // 首次进入轮询：先启动倒计时（不切页），避免 setup 阶段耗时吃掉了
