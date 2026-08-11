@@ -951,6 +951,83 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
 > 注意：本改动已在 `dev/v4.0-tpu` 分支提交并推送（含 TPU 间歇送料、写死型号表、OLED 通讯页等）。间歇周期初值（`push_cycle_ms`/`push_on_ms`）
 > 为基于硬度的经验占位，需实测后按机型校准（越软停越久）。
 
+### 14.12 空通道首料按最软（85A）降级 + DM 自动装载/redetect 推力修复（解决第一次上料速度太快送不进）
+
+> 本节记录 `dev/v4.0-tpu` 分支在 14.11 之后、针对「第一次烧录完上料速度就很快、TPU 送不进去」的二次修复。
+> 背景：14.11 让 TPU 在 on_use / Stage2 装填阶段降推力 + 间歇送料，但**首次烧录、通道为空、打印机还没设型号**时，
+> 上料（DM 自动装载 + 打印机主动 send 的 Stage1 快送）仍走刚性参数 —— 速度 60mm/s、推力 900 全速，TPU 软料被猛拽送不进，
+> 于是连「在打印机里设置通道耗材型号」这步都做不了（先得把料送进通道才能设）。
+
+#### 14.12.1 问题根因（两个叠加）
+
+1. **TPU 判定被锁在 `on_use` 分支里，DM 自动装载（首料上料）永远进不去**。
+   `tpu_p` 的赋值原写在 `run()` 的 `pressure_ctrl_on_use` 分支内（约 1562 行），而 DM 自动装载
+   （`pressure_ctrl_idle` 分支，约 1143 行起）与 `on_use` **互斥**——跑到 DM 自动装载时 `tpu_p` 永远是 `nullptr`，
+   所有 TPU 降级（推力、速度环、间歇门控）在首料上料时**根本不触发**。
+   表现：第一次上料速度 60mm/s、推力 900 全速，TPU 直接被猛拽、送不进通道。
+
+2. **空通道没有降级入口**。`tpu_p` 仅在 `filament_type == tpu`（打印机已下发 `GFU98` 设好型号）时才非空；
+   空通道 `filament_type == unknown`，完全进不了任何 TPU 逻辑，连「先用最软把料送进来」的机会都没有。
+
+3. **redetect（料松脱重新送料）硬 900 猛拽**：`filament_motion_redetect` 分支 `x = -dir * 900.0f` 是写死的刚性最大推力，
+   TPU 通道料意外松脱重新送料时也会被 900 猛拽啃伤。
+
+#### 14.12.2 改动清单（`src/Motion_control.cpp`）
+
+1. **TPU 判定提前到 `run()` 顶部、统一三种情形**（原先只在 `on_use` 分支里算，现已移到 `run()` 顶部、DM 自动装载之前）：
+
+   | 运行时情形 | `tpu_p` | 行为 |
+   |---|---|---|
+   | 打印机已设型号 `GFU98`（`filament_type == tpu`） | `tpu_param_fixed(CHx)`（写死表真实型号 GFU85/90/95/98） | 按设定料的真实参数推 |
+   | **空通道首料**：`filament_type == unknown` 且 `filament_channel_inserted[CHx]` 为真 | `&TPU_PARAMS[TPU_PARAMS_N-1]`（参数表末项 = 最软 85A） | 先按最软把料送进通道 |
+   | 设成 PLA/PETG 等非 TPU（`filament_type` 为其它值） | `nullptr` | 走原 v3.2 刚性常量（零差异） |
+
+   - `filament_channel_inserted[CHx]` 来自进线口料盘检测（`(a > VMIN) && (a < VMAX)`），**不是**"料已送进通道"的标志——
+     所以"线材已插入、料未送进、打印机未设型号"的空通道首料场景下能正确触发最软降级。料盘都没插时为 false，不会误降级（此时本来也没上料动作）。
+   - 顶部算好后，`tpu_p_run` 同步指向它（运行期指针，供 PWM 出口的间歇门控统一使用），DM 自动装载 / Stage1 / Stage2 / on_use / 间歇门控**全部复用同一个 `tpu_p`**，不再各自判定。
+   - 删除原 `on_use` 分支里重复的 `tpu_p` / `tpu_p_run` 赋值块（已由顶部取代）。
+
+2. **DM 自动装载（首料上料）自动吃到降级**：DM 分支原就用 `tpu_p ? tpu_p->feed_pwm_lo : DM_AUTO_PWM_PUSH`
+   作为 `dm_push_pwm`（约 1143 行），但因原来 `tpu_p` 在 `on_use` 才赋值、DM 永远取到 `nullptr`。
+   现在顶部已算好、空通道首料 `tpu_p` 指向 85A，于是首料上料推力 = `feed_pwm_lo`（85A 约 300~320），
+   不再是刚性 `DM_AUTO_PWM_PUSH` 全速猛拽。
+
+3. **打印机主动 send 的 Stage1 速度环降级**（约 1817 行）：`V = tpu_p ? tpu_p->feed_speed : 60.0f`。
+   该速度环在 `filament_motion_send`（Stage1 快送）分支内。空通道首料时 `tpu_p` 现非空，速度取 85A 的 `feed_speed`（约 35mm/s）
+   替代刚性 60mm/s；设好型号后取写死表型号的 `feed_speed`。推力带（PID 上限 `feed_pwm_hi/lo`）同理随 `tpu_p` 降级。
+
+4. **redetect 重新送料降级**（约 1520 行）：`x = -dir * (tpu_p ? tpu_p->feed_pwm_hi : 900.0f)`，
+   TPU 通道料松脱重新送料时用软料 `feed_pwm_hi`（85A 约 320）替代刚性 900，避免软料被猛拽啃伤。
+
+#### 14.12.3 完整上料闭环（修复后）
+
+```
+首次烧录、线材插入、打印机尚未设型号（filament_type == unknown, 通道已插入）
+   └─> DM 自动装载 / 打印机主动 send 首料上料
+         └─> tpu_p = &TPU_PARAMS[末项 85A]（最软）   ← 空通道首料降级
+               ├─ DM 推力: dm_push_pwm = feed_pwm_lo(85A≈300) 替代刚性全速
+               ├─ Stage1 速度环: feed_speed(85A≈35mm/s) 替代 60mm/s
+               └─ 间歇门控: 按 85A 的 push_cycle/push_on 脉冲式送料
+
+料进到通道后，在打印机里设置通道耗材型号（下发 GFU98）
+   └─> filament_type == tpu  →  tpu_p = tpu_param_fixed(CHx)（写死表真实型号）
+         └─> 之后自动装载 / 自动回抽后再进料 / on_use 补料 全部按写死型号参数推
+
+中途把通道设成 PLA/PETG 等非 TPU
+   └─> filament_type 退出 tpu/unknown  →  tpu_p = nullptr  → 走原 v3.2 刚性常量（零差异）
+```
+
+#### 14.12.4 效果与验证
+
+- **第一次上料不再猛拽**：空通道首料自动按最软 85A（推力 `feed_pwm_lo≈300`、速度 `feed_speed≈35mm/s`、间歇脉冲送料）先把料送进通道，
+  用户能在打印机里正常设置 TPU for AMS 型号；设好后无缝切到写死表对应型号的真实送料参数。
+- **设好型号前都按最软**：首料进通道后、打印机还没下发 `GFU98` 期间（仍是 `unknown`），后续 on_use 补料仍按 85A 走；
+  下发 `GFU98` 后立即切写死型号——符合「设好型号后再按设定的料送」的诉求。
+- DM 自动装载、打印机主动 send 的 Stage1 快送、redetect 重送料、on_use 补料**四类正向送料**均按 `tpu_p` 降级，
+  PLA/PETG 等非 TPU 完全零差异。
+- 验证：编译 `build_one.sh standard 1 0 D "" 1 GFU02 GFU95 GFU90 GFU85`（AMS_D 槽位）通过；上板实测首料应明显变缓、料正常入管。
+- Flash 占用约 97.7%（接近上限，后续加功能需留意）。
+
 ---
 
 ## 15. SSD1306 OLED 状态屏（`BMCU_OLED`，v4.0-tpu 新增）

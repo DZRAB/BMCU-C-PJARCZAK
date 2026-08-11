@@ -82,6 +82,7 @@ struct _tpu_param
     float pull_comp_m;
     uint16_t push_cycle_ms;
     uint16_t push_on_ms;
+    float feed_speed;        // v4.0-tpu: Stage1 快送目标线速度(mm/s)。PLA/PETG 用 60，软料调小防猛拽。
 };
 
 // v4.0-tpu: FILAMENT_RGB 宏关闭时，非 TPU 材质（PLA/PETG/ABS/PA/未知/other）
@@ -96,13 +97,20 @@ struct _tpu_param
 // 越软 → target 越低、band_hi 越低、力度越小、时间窗越长、回抽补偿越大。
 static const _tpu_param TPU_PARAMS[] =
 {
-    // model             id      name           r   g   b   target band_hi p1ms p2ms jamms p1lim p2lim feedhi feedlo pullcomp  cyc  on
-    { _tpu_model::TPU_FOR_AMS,  "GFU98", "TPU for AMS",  0x00u,0x20u,0x20u, 50.0f, 58.0f, 2000, 3000, 6000, 520.0f, 160.0f, 440.0f, 950.0f, 0.01f, 800, 500 }, // 68D 青
-    { _tpu_model::TPU_95A_HF,   "GFU00", "TPU 95A HF",   0x00u,0x20u,0x00u, 45.0f, 54.0f, 2500, 4000, 7000, 420.0f, 120.0f, 400.0f, 900.0f, 0.02f, 900, 450 }, // 95A HF 绿
-    { _tpu_model::TPU_GEN_AMS,  "GFU02", "Generic TPU",  0x18u,0x00u,0x20u, 50.0f, 58.0f, 2000, 3000, 6000, 520.0f, 160.0f, 440.0f, 950.0f, 0.01f, 800, 500 }, // 约68D 紫
-    { _tpu_model::TPU_95A,      "GFU95", "TPU 95A",      0x20u,0x18u,0x00u, 45.0f, 54.0f, 2500, 4000, 7000, 420.0f, 120.0f, 400.0f, 900.0f, 0.02f, 900, 420 }, // 95A 黄
-    { _tpu_model::TPU_90A,      "GFU90", "TPU 90A",      0x20u,0x0Au,0x00u, 40.0f, 50.0f, 3000, 5000, 8000, 360.0f, 100.0f, 360.0f, 850.0f, 0.03f,1000, 400 }, // 90A 橙
-    { _tpu_model::TPU_85A,      "GFU85", "TPU 85A",      0x20u,0x00u,0x00u, 35.0f, 46.0f, 3500, 6000, 9000, 300.0f,  80.0f, 320.0f, 800.0f, 0.04f,1200, 400 }, // 85A 红
+    // model             id      name           r   g   b   target band_hi p1ms p2ms jamms p1lim p2lim feedhi feedlo pullcomp  cyc  on   feed_speed
+    // 注意：RGB 识别色故意调亮（满量程附近），因 WS2812 在 0x08~0x20 低亮度下肉眼几乎不可辨，
+    // 调亮后才能一眼区分各型号（验证写死表是否生效）。
+    //
+    // v4.0-tpu 推力修正（关键）：代码里 pwm_lo=tpu_p->feed_pwm_lo(第14列), pwm_cap=pwm_fast_onuse=tpu_p->feed_pwm_hi(第13列)。
+    // 非 TPU(PLA/PETG) 通道硬编码 pwm_lo=380 / pwm_cap=900 / Stage1 速度=60mm/s。
+    // 设计：软料推力应 < 硬料，故所有 TPU 的 feed_pwm_lo/hi 均 < 非 TPU 的 380/900，且 Stage1 速度 < 60。
+    // 越软：速度越小、推力越小。硬度升序：85A(最软) < 90A < 95A < 68D(最硬,最接近PLA)。
+    { _tpu_model::TPU_FOR_AMS,  "GFU98", "TPU for AMS",  0x00u,0xFFu,0xFFu, 50.0f, 58.0f, 2000, 3000, 6000, 450.0f, 320.0f, 320.0f, 370.0f, 0.01f, 800, 500, 50.0f }, // 68D 青（最硬）
+    { _tpu_model::TPU_95A_HF,   "GFU00", "TPU 95A HF",   0x00u,0xFFu,0x00u, 45.0f, 54.0f, 2500, 4000, 7000, 420.0f, 280.0f, 280.0f, 350.0f, 0.02f, 900, 450, 45.0f }, // 95A HF 绿
+    { _tpu_model::TPU_GEN_AMS,  "GFU02", "Generic TPU",  0xFFu,0x00u,0xFFu, 50.0f, 58.0f, 2000, 3000, 6000, 450.0f, 320.0f, 320.0f, 370.0f, 0.01f, 800, 500, 50.0f }, // 约68D 紫（最硬）
+    { _tpu_model::TPU_95A,      "GFU95", "TPU 95A",      0xFFu,0xD0u,0x00u, 45.0f, 54.0f, 2500, 4000, 7000, 400.0f, 260.0f, 260.0f, 340.0f, 0.02f, 900, 420, 45.0f }, // 95A 黄
+    { _tpu_model::TPU_90A,      "GFU90", "TPU 90A",      0xFFu,0x80u,0x00u, 40.0f, 50.0f, 3000, 5000, 8000, 350.0f, 220.0f, 220.0f, 320.0f, 0.03f,1000, 400, 40.0f }, // 90A 橙
+    { _tpu_model::TPU_85A,      "GFU85", "TPU 85A",      0xFFu,0x00u,0x00u, 35.0f, 46.0f, 3500, 6000, 9000, 300.0f, 180.0f, 180.0f, 300.0f, 0.04f,1200, 400, 35.0f }, // 85A 红（最软）
 };
 static const int TPU_PARAMS_N = (int)(sizeof(TPU_PARAMS) / sizeof(TPU_PARAMS[0]));
 

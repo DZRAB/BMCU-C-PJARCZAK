@@ -396,6 +396,9 @@ const char* SSD1306_OLED::material_label(uint8_t ch)
 }
 
 // 把 RGB 转换成肉眼易读的 3 字母颜色简写
+// 注意：本函数用于"打印机下发的真实耗材色"显示。Bambu 色卡常见值：
+//   红 (255,0,0) / 橙 (255,128,0) / 黄 (255,255,0) / 绿 (0,255,0)
+//   / 青 (0,255,255) / 蓝 (0,0,255) / 紫 (255,0,255) / 白 (255,255,255)
 const char* SSD1306_OLED::color_name(uint8_t r, uint8_t g, uint8_t b)
 {
     // 先判断灰度/黑白
@@ -404,22 +407,23 @@ const char* SSD1306_OLED::color_name(uint8_t r, uint8_t g, uint8_t b)
     // 主色判定（取最大分量）
     if (r >= g && r >= b)
     {
-        if (g > 120 && b > 120) return "ORA";   // 红+绿+蓝 -> 橙/粉
-        if (b > 120) return "PUR";              // 红+蓝 -> 紫
-        if (g > 120) return "YEL";              // 红+绿 -> 黄
-        return "RED";
+        // 红为主
+        if (g > 90) return "ORA";   // 红+绿明显 -> 橙（橙 r255 g128）
+        if (b > 90) return "PUR";   // 红+蓝 -> 紫
+        return "RED";               // 纯红
     }
     if (g >= r && g >= b)
     {
-        if (r > 120 && b > 120) return "CYA";   // 绿+红+蓝 -> 青
-        if (b > 120) return "CYA";              // 绿+蓝 -> 青
-        if (r > 120) return "YEL";              // 绿+红 -> 黄
+        // 绿为主
+        if (r > 90 && b > 90) return "CYA";   // 绿+红+蓝 -> 青
+        if (b > 90) return "CYA";             // 绿+蓝 -> 青
+        if (r > 90) return "YEL";             // 绿+红 -> 黄
         return "GRE";
     }
     // 蓝色最大
-    if (r > 120 && g > 120) return "CYA";
-    if (r > 120) return "PUR";
-    if (g > 120) return "CYA";
+    if (r > 90 && g > 90) return "CYA";
+    if (r > 90) return "PUR";
+    if (g > 90) return "CYA";
     return "BLU";
 }
 

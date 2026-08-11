@@ -1064,8 +1064,41 @@ public:
         const float now_speed = speed_as5600[CHx];
         float x = 0.0f;
 
-        // v4.0-tpu: TPU 通道识别结果(函数级, 供末尾间歇送料门控统一使用)
-        const _tpu_param *tpu_p_run = nullptr;
+        // v4.0-tpu: TPU 通道识别结果(供末尾间歇送料门控统一使用)。
+        // 注：tpu_p 已在下方统一判定，tpu_p_run 直接复用它（运行期指针）。
+        const _tpu_param *tpu_p_run = nullptr;   // 占位，下方 tpu_p 算好后立即赋值
+        // v4.0-tpu: 本周期是否处于"往前补料推料"分支(on_use 低缓冲分支 x=-dir*pwm)。
+        // 仅此分支需要做间歇送料截断(软料不能持续顶); 顶满避让分支(x=dir*PID)不截断。
+        bool feeding_fwd = false;
+        // v4.0-tpu: TPU 通道识别结果(函数级, 整个 Motion_control_cal 可见, 供
+        //           Stage1 速度环 / Stage2 / DM 自动装载 / on_use / 间歇门控统一使用)。
+        // 关键修复：本判定必须在 run() 顶部统一计算，不能只放在 on_use 分支里——
+        // DM 自动装载(首料上料)走的是 pressure_ctrl_idle 分支，与 on_use 互斥，
+        // 原写法导致首料上料时 tpu_p 永远是 nullptr、永远走刚性参数(速度60mm/s、
+        // 推力900)，TPU 软料被猛拽送不进。现统一在顶部算好，各分支复用。
+        //
+        // 三种情形的处理：
+        //   1) filament_type == tpu  (打印机已下发 GFU98 设好型号)
+        //        -> 用编译期写死表 TPU_FIXED_ID[CHx] 的真实型号参数。
+        //   2) filament_type == unknown 且通道已插入(空通道首次上料, 打印机还没设型号)
+        //        -> 按"最软"参数(参数表末项 TPU_85A)把料先送进来，避免猛拽送不进；
+        //           等打印机下发 GFU98 设好型号后自动切到情形1的对应型号参数。
+        //   3) 其他(PLA/PETG/... 等非 TPU 已设材质) -> nullptr, 走原刚性常量(零差异)。
+        const _tpu_param *tpu_p = nullptr;
+        {
+            auto &F = ams[motion_control_ams_num].filament[CHx];
+            if (F.filament_type == _filament_type::tpu)
+            {
+                tpu_p = tpu_param_fixed((uint8_t)CHx);   // 已设型号 -> 写死表真实型号
+            }
+            else if (F.filament_type == _filament_type::unknown &&
+                     filament_channel_inserted[CHx])
+            {
+                // 空通道首料：按最软(85A)把料送进来，设好型号后再按设定料送。
+                tpu_p = &TPU_PARAMS[TPU_PARAMS_N - 1];
+            }
+        }
+        tpu_p_run = tpu_p;   // 间歇门控统一出口用的运行期指针(全程有效)
 #if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
         bool  dm_autoload_active = false;
         float dm_autoload_x      = 0.0f;
@@ -1101,6 +1134,11 @@ public:
         if (motion == filament_motion_enum::filament_motion_pressure_ctrl_idle)
         {
         #if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
+                    // v4.0-tpu: DM 自动装载(手动压/拽缓冲头触发的首次装填)也要按 TPU 降级推力。
+                    // 注意: 前提是本通道已被打印机设为 TPU(filament_type==tpu, tpu_p 非空);
+                    // 否则 tpu_p==nullptr, 仍用刚性 900, 体现"软料识别后才降级"。
+                    const float dm_push_pwm = tpu_p ? tpu_p->feed_pwm_lo : DM_AUTO_PWM_PUSH;
+                    const float dm_pull_pwm = tpu_p ? tpu_p->feed_pwm_lo : DM_AUTO_PWM_PULL;
                     // --- DM 自动装载（阶段1 + 阶段2）---
                     if (filament_channel_inserted[CHx] && (dm_loaded[CHx] == 0u))
                     {
@@ -1193,7 +1231,7 @@ public:
                                 }
                                 else
                                 {
-                                    dm_autoload_x = -dir * DM_AUTO_PWM_PUSH;
+                                    dm_autoload_x = -dir * dm_push_pwm;
                                 }
                                 break;
 
@@ -1213,7 +1251,7 @@ public:
                                 }
                                 else
                                 {
-                                    dm_autoload_x = dir * DM_AUTO_PWM_PULL;
+                                    dm_autoload_x = dir * dm_pull_pwm;
                                 }
                                 break;
 
@@ -1282,7 +1320,7 @@ public:
                                 }
                                 else
                                 {
-                                    dm_autoload_x = -dir * DM_AUTO_PWM_PUSH;
+                                    dm_autoload_x = -dir * dm_push_pwm;
                                 }
                                 break;
 
@@ -1334,7 +1372,7 @@ public:
                                 }
                                 else
                                 {
-                                    dm_autoload_x = dir * DM_AUTO_PWM_PULL;
+                                    dm_autoload_x = dir * dm_pull_pwm;
                                 }
                                 break;
 
@@ -1356,7 +1394,7 @@ public:
                                 }
                                 else
                                 {
-                                    dm_autoload_x = dir * DM_AUTO_PWM_PULL;
+                                    dm_autoload_x = dir * dm_pull_pwm;
                                 }
                                 break;
 
@@ -1380,7 +1418,7 @@ public:
                                 }
                                 else
                                 {
-                                    dm_autoload_x = dir * DM_AUTO_PWM_PULL;
+                                    dm_autoload_x = dir * dm_pull_pwm;
                                 }
                                 break;
 
@@ -1479,7 +1517,9 @@ public:
         }
         else if (motion == filament_motion_enum::filament_motion_redetect) // 退出到无 filament 状态 -> 重新送料
         {
-            x = -dir * 900.0f;
+            // v4.0-tpu: 料松脱重新送料也要按 TPU 降级推力，避免软料被 900 猛拽啃伤。
+            const float redetect_pwm = tpu_p ? tpu_p->feed_pwm_hi : 900.0f;
+            x = -dir * redetect_pwm;
         }
         else if (MC_ONLINE_key_stu[CHx] != 0) // 通道已激活且有 filament
         {
@@ -1543,19 +1583,11 @@ public:
                 const float pct = MC_PULL_pct_f[CHx];
 
                 // v4.0-tpu: 决定当前通道 CHx 使用的 TPU 参数指针。
-                // 通用固件内置 TPU 逻辑：仅当该通道运行时识别为 TPU（即打印机设成
-                // TPU for AMS / 下发 GFU98, filament_type==tpu）时，忽略下发的 GFU98，
-                // 改用编译期写死表 TPU_FIXED_ID[CHx] 的真实型号参数跑。
-                // 设 PLA/PETG/... 等非 TPU：tpu_p 为 nullptr，走原刚性常量，
-                // 行为与 v3.2 完全一致（零差异）。写死表由 BMCU_TPU_FIX0..3 决定，
-                // 缺省全 GFU85（最软最稳）。
-                const _tpu_param *tpu_p = nullptr;
-                tpu_p_run = nullptr;
-                if (ams[motion_control_ams_num].filament[CHx].filament_type == _filament_type::tpu)
-                {
-                    tpu_p = tpu_param_fixed((uint8_t)CHx);
-                    tpu_p_run = tpu_p;
-                }
+                // 通用固件内置 TPU 逻辑：tpu_p / tpu_p_run 已在 run() 顶部统一判定——
+                // 打印机下发 GFU98(filament_type==tpu) 时用写死表真实型号；
+                // 空通道首料(filament_type==unknown 且通道已插入)时用最软(85A)先送进来；
+                // 设 PLA/PETG/... 等非 TPU 时 tpu_p 为 nullptr，走原刚性常量，
+                // 行为与 v3.2 完全一致（零差异）。写死表由 BMCU_TPU_FIX0..3 决定。
 
                 // 送料目标带：默认取通用(刚性料)常量；TPU 通道用对应型号参数。
                 float target_pct = tpu_p ? tpu_p->on_use_target_pct : MC_ON_USE_TARGET_PCT;
@@ -1629,6 +1661,7 @@ public:
                     x = -dir * pwm;
                     PID_pressure.clear();
                     on_use_linear = true;
+                    feeding_fwd = true;   // 往前补料推料 -> 进入间歇送料截断
                 }
                 else
                 {
@@ -1782,7 +1815,8 @@ public:
                     {
                         constexpr uint64_t SEND_SOFTSTART_MS = 300ull;
                         constexpr float    V0 = 10.0f;
-                        constexpr float    V  = 60.0f;
+                        // v4.0-tpu: TPU 通道 Stage1 快送目标速度降级（软料不能猛拽），非 TPU 仍 60mm/s
+                        const float        V  = tpu_p ? tpu_p->feed_speed : 60.0f;
 
                         const uint64_t dt = (send_start_ms != 0) ? (now_ms - send_start_ms) : 1000000ull;
 
@@ -1846,6 +1880,15 @@ public:
             pwm0 = PULL_PWM_MIN + (pwm_zero - PULL_PWM_MIN) * k;
 
             if (pwm0 < PULL_PWM_MIN) pwm0 = PULL_PWM_MIN;
+        }
+
+        // v4.0-tpu: Stage1 快送（速度环）TPU 通道 PWM 上限降级，防软料被猛推。
+        // 非 TPU 通道不加此限幅（保持原刚性高速送料）。
+        if (tpu_p)
+        {
+            const float tpu_lim = tpu_p->feed_pwm_lo;
+            if (x >  tpu_lim) x =  tpu_lim;
+            if (x < -tpu_lim) x = -tpu_lim;
         }
 
         if (x > (float)deadband)
@@ -2069,9 +2112,10 @@ public:
             if (cyc > 0u && on < cyc)
             {
                 const uint32_t phase = (uint32_t)(now_ms % (uint64_t)cyc);
-                // x 与 dir 同向 -> 正向往前送料; 异向 -> 回退/拉料(不截断)
-                const bool pushing_fwd = (dir != 0.0f) && (((float)pwm_out0) * dir > 0.0f);
-                if (pushing_fwd && phase >= (uint32_t)on)
+                // 仅"往前补料推料"分支(feeding_fwd)做截断; 顶满避让/回退不截断。
+                // 原判定 pwm_out0*dir>0 符号反了(x=-dir*pwm 使往前送时异号),
+                // 导致间歇门控永不触发、TPU 持续被顶 -> 推力异常大。
+                if (feeding_fwd && phase >= (uint32_t)on)
                 {
                     pwm_out0 = 0;   // 停窗口: 电机停转, 让软料松弛
                 }
