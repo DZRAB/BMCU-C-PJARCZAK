@@ -474,56 +474,107 @@ void SSD1306_OLED::draw_channels()
 //   PKG 123456         总收包计数（持续增长=没漏包）
 //   SET 000123         set_filament 调用次数（打印机下发设料计数）
 //   ID  GFU98          最近收到的 filament_id（未收到则 "---"）
+// 把开机运行时间格式化为 "DDd HH:MM:SS"（最多 16 列），写入 out
+static void fmt_uptime(char* out, uint8_t cap)
+{
+    if (!out || cap == 0u) return;
+    uint64_t sec = time_ms64() / 1000ull;
+    const uint32_t s  = (uint32_t)(sec % 60ull);
+    const uint32_t m  = (uint32_t)((sec / 60ull) % 60ull);
+    const uint32_t h  = (uint32_t)((sec / 3600ull) % 24ull);
+    uint32_t d  = (uint32_t)(sec / 86400ull);
+    int k = 0;
+    if (d > 0)
+    {
+        if (d > 99) d = 99;   // 防溢出
+        out[k++] = (char)('0' + (d / 10)); out[k++] = (char)('0' + (d % 10));
+        out[k++] = 'd'; out[k++] = ' ';
+    }
+    out[k++] = (char)('0' + (h / 10)); out[k++] = (char)('0' + (h % 10));
+    out[k++] = ':';
+    out[k++] = (char)('0' + (m / 10)); out[k++] = (char)('0' + (m % 10));
+    out[k++] = ':';
+    out[k++] = (char)('0' + (s / 10)); out[k++] = (char)('0' + (s % 10));
+    while (k < cap) out[k++] = ' ';
+    out[cap] = 0;
+}
+
 void SSD1306_OLED::draw_comm(bool comm_ok)
 {
-    char l0[OLED_COLS + 1u];
-    int k = 0;
+    // 布局（4 行，互不冲突）：
+    //   L0: COMM OK/ERR            —— 通讯状态
+    //   L1: PKG nnnnn SET nnnnn     —— 两个计数合并一行（左 PKG / 右 SET）
+    //   L2: ID xxxxx                —— 当前 filament_id
+    //   L3: RUN HH:MM:SS            —— 运行时间独占一行（丝滑原地重写）
+    // 注意：L0 必须每次都交给 draw_line_if_changed 判定。tick() 切页时会 clear()
+    // 清空屏幕并重置 s_line_buf，若用"状态翻转才重绘"的缓存会跳过、导致 L0 空白。
+    // draw_line_if_changed 本身已对未变化内容跳过重绘，不会闪烁。
     const char* cstat = comm_ok ? "OK" : "ERR";
-    l0[k++] = 'C'; l0[k++] = 'O'; l0[k++] = 'M'; l0[k++] = 'M'; l0[k++] = ' ';
-    l0[k++] = cstat[0]; l0[k++] = cstat[1];
-    while (k < 16) l0[k++] = ' ';
-    l0[16] = 0;
-    draw_line_if_changed(0, l0);
 
-    char l1[OLED_COLS + 1u];
-    k = 0;
-    l1[k++] = 'P'; l1[k++] = 'K'; l1[k++] = 'G'; l1[k++] = ' ';
-    // 右对齐 6 位十进制
+    // --- L0 通讯状态（每次判定，切页后自动重绘）---
+    {
+        char l0[OLED_COLS + 1u];
+        int k = 0;
+        l0[k++] = 'C'; l0[k++] = 'O'; l0[k++] = 'M'; l0[k++] = 'M'; l0[k++] = ' ';
+        l0[k++] = cstat[0]; l0[k++] = cstat[1];
+        while (k < 16) l0[k++] = ' ';
+        l0[16] = 0;
+        draw_line_if_changed(0, l0);
+    }
+
+    // --- L1：PKG + SET 同行（各占约 8 列，互不覆盖）---
     char num[12]; int ni = 0;
-    uint32_t v = g_pkg_recv_cnt;
+    uint32_t v;
+    char l1[OLED_COLS + 1u];
+    int k = 0;
+    // 左半：PKG nnnnn（右对齐到列 7）
+    l1[k++] = 'P'; l1[k++] = 'K'; l1[k++] = 'G'; l1[k++] = ' ';
+    v = g_pkg_recv_cnt; ni = 0;
     if (v == 0) num[ni++] = '0';
     while (v > 0) { num[ni++] = (char)('0' + (v % 10)); v /= 10; }
-    for (int i = ni - 1; i >= 0; i--) { if (k < 14) l1[k++] = num[i]; }
+    for (int i = ni - 1; i >= 0; i--) { if (k < 7) l1[k++] = num[i]; }
+    while (k < 8) l1[k++] = ' ';
+    // 右半：SET nnnnn（从列 8 起）
+    l1[k++] = 'S'; l1[k++] = 'E'; l1[k++] = 'T'; l1[k++] = ' ';
+    v = g_set_filament_cnt; ni = 0;
+    if (v == 0) num[ni++] = '0';
+    while (v > 0) { num[ni++] = (char)('0' + (v % 10)); v /= 10; }
+    for (int i = ni - 1; i >= 0; i--) { if (k < 15) l1[k++] = num[i]; }
     while (k < 16) l1[k++] = ' ';
     l1[16] = 0;
     draw_line_if_changed(1, l1);
 
+    // --- L2：ID xxxxx ---
     char l2[OLED_COLS + 1u];
     k = 0;
-    l2[k++] = 'S'; l2[k++] = 'E'; l2[k++] = 'T'; l2[k++] = ' ';
-    v = g_set_filament_cnt;
-    ni = 0;
-    if (v == 0) num[ni++] = '0';
-    while (v > 0) { num[ni++] = (char)('0' + (v % 10)); v /= 10; }
-    for (int i = ni - 1; i >= 0; i--) { if (k < 14) l2[k++] = num[i]; }
+    l2[k++] = 'I'; l2[k++] = 'D'; l2[k++] = ' ';
+    if (g_last_filament_id[0] != 0)
+    {
+        for (int i = 0; g_last_filament_id[i] && k < 15; i++) l2[k++] = g_last_filament_id[i];
+    }
+    else
+    {
+        l2[k++] = '-'; l2[k++] = '-'; l2[k++] = '-';
+    }
     while (k < 16) l2[k++] = ' ';
     l2[16] = 0;
     draw_line_if_changed(2, l2);
 
-    char l3[OLED_COLS + 1u];
-    k = 0;
-    l3[k++] = 'I'; l3[k++] = 'D'; l3[k++] = ' ';
-    if (g_last_filament_id[0] != 0)
+    // --- L3：运行时间独占一行 ---
+    // 直接整行 show_text 原地写（不调用 clear_line，因此不会整行黑闪）。
+    // 内容未变时写的是相同字模（无视觉变化），仅变化的秒位原地更新 → 丝滑时钟效果。
+    // 切页回来时本行整体重写，自动覆盖上一页残留内容。
     {
-        for (int i = 0; g_last_filament_id[i] && k < 15; i++) l3[k++] = g_last_filament_id[i];
+        char up[16];
+        fmt_uptime(up, 15);
+        char l3[OLED_COLS + 1u];
+        int k3 = 0;
+        l3[k3++] = 'R'; l3[k3++] = 'U'; l3[k3++] = 'N'; l3[k3++] = ' ';
+        for (uint8_t i = 0; up[i] && k3 < OLED_COLS; i++) l3[k3++] = up[i];
+        while (k3 < OLED_COLS) l3[k3++] = ' ';
+        l3[OLED_COLS] = 0;
+        show_text(3, 0, l3);
     }
-    else
-    {
-        l3[k++] = '-'; l3[k++] = '-'; l3[k++] = '-';
-    }
-    while (k < 16) l3[k++] = ' ';
-    l3[16] = 0;
-    draw_line_if_changed(3, l3);
 }
 
 void SSD1306_OLED::notify_action(uint8_t ch, oled_action act)
@@ -601,7 +652,7 @@ void SSD1306_OLED::tick(bool aht20_present, bool aht20_online,
     // ===== 2) 页面轮询 =====
     // [临时调试] 设 true 时 OLED 只显示通讯监控页(第3页)，方便上机盯 PKG/SET/ID。
     // 正常发布时改为 false（或整段注释掉）。
-    if (true)
+    if (false)
     {
         draw_comm(comm_ok);
         return;

@@ -225,24 +225,24 @@ int main(void)
     // 显示系统启动进度，而非等所有初始化跑完才亮。
     SSD1306_OLED::init();
     if (SSD1306_OLED::is_ready())
-        SSD1306_OLED::draw_message("BMCU BOOT", "", "", "");
+        SSD1306_OLED::draw_message("BMCU INIT", "", "", "");
 #endif // BMCU_OLED
 
 #ifdef BMCU_OLED
     if (SSD1306_OLED::is_ready())
-        SSD1306_OLED::draw_message("BMCU BOOT", "CALIB...", "", "");
+        SSD1306_OLED::draw_message("BMCU INIT", "CALIB...", "", "");
 #endif // BMCU_OLED
     MC_PULL_calibration_boot();
 #ifdef BMCU_OLED
     if (SSD1306_OLED::is_ready())
-        SSD1306_OLED::draw_message("BMCU BOOT", "CALIB OK", "", "");
+        SSD1306_OLED::draw_message("BMCU INIT", "CALIB OK", "", "");
 #endif // BMCU_OLED
 
     ams_datas_read();
 
 #ifdef BMCU_OLED
     if (SSD1306_OLED::is_ready())
-        SSD1306_OLED::draw_message("BMCU BOOT", "LOAD...", "", "");
+        SSD1306_OLED::draw_message("BMCU INIT", "LOAD...", "", "");
 #endif // BMCU_OLED
 
     {
