@@ -275,7 +275,9 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
             ams_ptr->filament[ch].motion = _filament_motion::send_out;
             ams_ptr->filament_use_flag = 0x02;
             ams_ptr->pressure = 0x4700;
+#ifdef BMCU_OLED
             SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_load);   // 进料覆盖显示
+#endif
         }
         else if (is_before_on_use)
         {
@@ -368,7 +370,9 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
 
             ams_ptr->filament[ch].motion = _filament_motion::on_use;
             ams_ptr->filament_use_flag = 0x04;
+#ifdef BMCU_OLED
             SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_feed);   // 送料覆盖显示
+#endif
 
             if (ams_ptr->pressure != 0xF06Fu) ams_ptr->pressure = 0x2B00;
 
@@ -394,7 +398,9 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
             {
                 ams_ptr->filament[ch].motion = _filament_motion::before_pull_back;
             }
+#ifdef BMCU_OLED
             SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_unload); // 退料覆盖显示
+#endif
 
             ams_ptr->filament_use_flag = 0x04;
             ams_ptr->pressure = 0x2B00;
@@ -426,7 +432,9 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
                 {
                     ams_ptr->filament[ch].motion = _filament_motion::pull_back;
                     ams_ptr->filament_use_flag = 0x02;
+#ifdef BMCU_OLED
                     SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_unload); // 退料覆盖显示
+#endif
                 }
 
                 ams_ptr->pressure = 0x4700;

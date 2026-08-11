@@ -1083,9 +1083,9 @@ AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_
 
 > ⚠️ **批量脚本的写死表不参与"变体分类/构建缓存 key"**：所有生成的固件使用**同一组**写死型号（由这 4 个环境变量决定）。本脚本即"全量统一写死表"用途，不会为不同写死组合分别产出/缓存。若需不同通道组合各编一份，请改用 `build_one.sh` 多次单编。
 
-### 16.3 必须手动改源码的开关（仅 2 处）
+### 16.3 必须手动改源码的开关（共 3 处）
 
-其余所有宏都由脚本注入，**不用改程序**。只有以下 2 处需手动编辑源码（且都不碰 `platformio.ini`）：
+其余所有宏都由脚本注入，**不用改程序**。只有以下 3 处需手动编辑源码（且都不碰 `platformio.ini`）：
 
 1. **OLED 总开关** — `src/oled/ssd1306_oled.h` 第 37-38 行
    ```c
@@ -1094,6 +1094,7 @@ AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_
    #endif
    ```
    默认开；想省空间或确认无屏时注释掉即可。
+   > 关闭路径修复说明（v4.0-tpu 后期）：早期版本 `bambu_bus_ams.cpp` 有 4 处 `SSD1306_OLED::notify_action(...)` 调用漏了 `#ifdef BMCU_OLED` 保护，手动注释 `#define BMCU_OLED` 后编译器报 'SSD1306_OLED' has not been declared、整个固件编不过——那时"关 OLED 省空间"不可用。现已补上 `#ifdef` 保护，关闭路径恢复：实测注释后 Flash 由 95.7% 降至 89.9%（省约 3.5KB），可正常出固件。
 
 2. **OLED 调试页开关** — `src/oled/ssd1306_oled.cpp` 的 `tick()` 开头
    ```cpp
