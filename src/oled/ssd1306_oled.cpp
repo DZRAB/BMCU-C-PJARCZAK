@@ -373,20 +373,22 @@ const char* SSD1306_OLED::material_label(uint8_t ch)
         return "TPU?";
     }
     // 非 TPU：优先用 Bambu 下发的材质 id（bambubus_filament_id，如 GFG00/GFA00）
-    if (f.bambubus_filament_id[0] && f.bambubus_filament_id[1])
+    // 直接按前 3 字符映射到材质名（屏宽有限，尽量短、直观）。
+    // bambubus filament_id 全部以 "GF" 开头, 第三位表示材质 (依据 Bambu Studio 官方预设 JSON):
+    // GFA=PLA / GFG=PETG / GFU=TPU / GFB=ABS / GFC=PC / GFL=PA ...
+    if (f.bambubus_filament_id[0] == 'G' && f.bambubus_filament_id[1] == 'F' && f.bambubus_filament_id[2])
     {
-        // 取后两位有意义的型号代码（GFx00 -> x00），屏宽有限，尽量短
-        // bambubus 形如 GFG00 / GFA00 / GFU98，取 "G00/A00/U98"
+        const char c = f.bambubus_filament_id[2];
+        if (c == 'G') return "PETG";
+        if (c == 'A') return "PLA";
+        if (c == 'B') return "ABS";   // GFB00
+        if (c == 'C') return "PC";    // GFC00
+        if (c == 'L') return "PA";    // GFLxx
+        if (c == 'U') return "TPU";   // GFU98 (理论上已走上面 tpu 分支, 这里兜底)
+        // 其它非 TPU 材质：用后两位代码兜底（如 U98）
         static char buf[8];
-        buf[0] = f.bambubus_filament_id[2];    // 材质字母 G/A/U...
-        buf[1] = f.bambubus_filament_id[3];    // 数字 0
-        buf[2] = f.bambubus_filament_id[4];    // 数字 0
-        buf[3] = 0;
-        if (buf[0] == 'G' && buf[1] == 'F' && buf[2] == 'G') return "PETG";
-        if (buf[0] == 'G' && buf[1] == 'F' && buf[2] == 'A') return "PLA";
-        if (buf[0] == 'A' && buf[1] == 'B' && buf[2] == 'S') return "ABS";
-        if (buf[0] == 'G' && buf[1] == 'F' && buf[2] == 'P') return "PC";
-        return buf;                            // 其它原样（如 U98）
+        buf[0] = c; buf[1] = f.bambubus_filament_id[3]; buf[2] = f.bambubus_filament_id[4]; buf[3] = 0;
+        return buf;
     }
     // 都没有：用 name 或 unknown
     if (f.name[0]) return f.name;

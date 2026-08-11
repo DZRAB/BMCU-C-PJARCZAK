@@ -318,6 +318,57 @@ int main(void)
             }
         }
 
+        /* ===== [调试用, 非上机, 已注释] 模拟打印机下发 set_filament 到各通道 =====
+        // 用途: 不上机验证 material_label 各分支(TPU写死型号 / PETG / PLA / ABS / PC)
+        //       以及"非 TPU 走刚性、写死表不参与"。
+        // 做法: 每 15 秒把 4 通道轮换到材质表里不同型号, 覆盖所有显示分支。
+        // 调试完必须整段删除并恢复上面 317 行 comm_ok = false; 的注释!
+        {
+            extern void get_package_set_filament(unsigned char *buf, int length);
+            // 每帧强制本机在线+有料(调试态无打印机, online 默认 false 会被通道页判 ERR;
+            // get_package_set_filament 不写 filament.online, 故这里每帧兜底置 true, 防止被重置)
+            ams[BAMBU_BUS_AMS_NUM].online = true;
+            for (int ch = 0; ch < 4; ch++)
+            {
+                ams[BAMBU_BUS_AMS_NUM].filament[ch].online = true;
+                ams[BAMBU_BUS_AMS_NUM].filament[ch].meters = 10.0f;   // 模拟有料, 否则显示 NULL
+            }
+            // 材质轮换表(依据 Bambu Studio 官方预设 filament_id):
+            //   GFU98=TPU for AMS / GFG00=PETG / GFA00=PLA / GFB00=ABS / GFC00=PC
+            // 每个相位把所有 4 通道设成【同一个型号】, 型号按表轮询一遍,
+            // 方便核对第二页 4 路是否都显示同一型号且正确(验证设置对了没)。
+            static const char* mats[5] = {"GFU98", "GFG00", "GFA00", "GFB00", "GFC00"};
+            static const int   mats_n = 5;
+            static uint64_t    sim_t0     = 0;
+            static int         sim_phase  = -1;
+            static bool        sim_started = false;
+            uint64_t now_ms = time_ms64();
+            static bool sim_issued = false;   // 当前相位是否已下发, 防止每帧重复发
+            if (!sim_started) { sim_started = true; sim_t0 = now_ms; sim_issued = false; }   // 上电立即下发第 0 相位
+            if (now_ms - sim_t0 >= 15000ull)   // 每 15 秒进下一相位
+            {
+                sim_t0 = now_ms;
+                sim_phase++;
+                sim_issued = false;           // 新相位还没下发
+            }
+            // 每个相位只在切换后下发一次: 4 通道全部设成同一个型号 mats[phase % n]
+            if (!sim_issued)
+            {
+                sim_issued = true;
+                const char* id = mats[sim_phase % mats_n];
+                for (int ch = 0; ch < 4; ch++)
+                {
+                    unsigned char sim_buf[32];
+                    memset(sim_buf, 0, sizeof(sim_buf));   // 必须全清零, 否则 buf[15~17] 取到栈垃圾 -> 颜色列乱跳
+                    sim_buf[5] = (unsigned char)((BAMBU_BUS_AMS_NUM << 4) | (ch & 0x0F));
+                    memcpy(sim_buf + 7, id, 5);
+                    bus_port_to_host.send_data_len = 0;   // 清掉上一次应答, 否则下一通道会被 early-return 拦截
+                    get_package_set_filament(sim_buf, 32);
+                }
+            }
+        }
+        ===== [调试块结束] 上机正式版务必保持整段注释; 如需再次模拟下发, 去掉首尾注释符并把上方 comm_ok=false 重新注释掉 ===== */
+
         // ===== SYS_RGB 心跳指示灯 =====
         // 有 AHT20 时：白灯常亮会烤高温度，故改为每 3 秒闪一下白光（~150ms），异常时红灯常亮；
         // 无 AHT20 时：保持原白色常亮逻辑（无烤温顾虑，且状态可见）。
