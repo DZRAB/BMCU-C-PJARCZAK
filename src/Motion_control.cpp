@@ -2149,22 +2149,43 @@ public:
 
         // v4.0-tpu: TPU 间歇送料门控（统一出口，覆盖 Stage2 装填/on_use/避让所有分支）
         // 软料不能被持续推力顶着, 否则料被压缩、从缓冲头间隙挤出、进不了管。
-        // 周期内分"推窗口(push_on_ms, 正常给 PWM)"和"停窗口(剩余时间, 强制 PWM=0)",
-        // 停窗口让电机停转、料松弛/被打印机拉走, 下一推窗口再补。越软停越久。
-        // 仅在 TPU 通道且为"往前送料"(x 与 dir 同向)时生效；回退/拉料不受影响。
-        if (tpu_p_run != nullptr)
+        // 模型(用户确认): "软"主要靠间歇比(转窗口占比)体现, 转窗口PWM给足保扭矩, 越软停越久。
+        // 间歇边界做缓升缓降ramp, 杜绝PWM瞬变冲击(电机启停电流尖峰/料丝被顿)。
+        // 仅在 TPU 通道且为"往前送料"(feeding_fwd)时生效；回退/拉料不受影响。
+        // 注意: 我们做的是"进入打印机挤出机前的进料优化"; 停窗口打印机拉料会带动缓冲头触发补偿送料,
+        //       属正常(打印机拉走=自然进料, BMCU只负责补push), 不是故障。
         {
-            const uint16_t cyc = tpu_p_run->push_cycle_ms;
-            const uint16_t on  = tpu_p_run->push_on_ms;
-            if (cyc > 0u && on < cyc)
+            // 每通道PWM斜坡当前值, 跨调用保留, 用于缓升缓降
+            static float tpu_pwm_ramp[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            if (tpu_p_run != nullptr)
             {
-                const uint32_t phase = (uint32_t)(now_ms % (uint64_t)cyc);
-                // 仅"往前补料推料"分支(feeding_fwd)做截断; 顶满避让/回退不截断。
-                // 原判定 pwm_out0*dir>0 符号反了(x=-dir*pwm 使往前送时异号),
-                // 导致间歇门控永不触发、TPU 持续被顶 -> 推力异常大。
-                if (feeding_fwd && phase >= (uint32_t)on)
+                const uint16_t cyc = tpu_p_run->push_cycle_ms;
+                const uint16_t on  = tpu_p_run->push_on_ms;
+                if (cyc > 0u && on < cyc)
                 {
-                    pwm_out0 = 0;   // 停窗口: 电机停转, 让软料松弛
+                    const uint32_t phase = (uint32_t)(now_ms % (uint64_t)cyc);
+                    if (feeding_fwd)
+                    {
+                        // 推窗口(phase<on)目标=原pwm_out0(给足), 停窗口目标=0(电机靠齿槽保持力不倒退)
+                        const float tgt = (phase < (uint32_t)on) ? (float)pwm_out0 : 0.0f;
+                        // 缓升缓降: 限变率 ramp_rate PWM/ms, 约80ms完成0<->满程, 杜绝瞬变
+                        const float ramp_rate = 12.0f; // PWM per ms
+                        const float diff = tgt - tpu_pwm_ramp[CHx];
+                        if (diff >  ramp_rate)      tpu_pwm_ramp[CHx] += ramp_rate;
+                        else if (diff < -ramp_rate) tpu_pwm_ramp[CHx] -= ramp_rate;
+                        else                        tpu_pwm_ramp[CHx] = tgt;
+                        if (tpu_pwm_ramp[CHx] < 0.0f) tpu_pwm_ramp[CHx] = 0.0f;
+                        pwm_out0 = (int)tpu_pwm_ramp[CHx];
+                    }
+                    else
+                    {
+                        // 非往前送料(避让/回退): 不间歇, 斜坡值跟随目标, 维持原逻辑
+                        tpu_pwm_ramp[CHx] = (float)pwm_out0;
+                    }
+                }
+                else
+                {
+                    tpu_pwm_ramp[CHx] = (float)pwm_out0; // 未启用间歇, 跟随
                 }
             }
         }
