@@ -29,7 +29,9 @@ BMCU-C 是 **Bambu Lab AMS（自动多色换料系统）的开源替代固件**�
 
 其中 `v1.0-baseline` 是基于原作者 V10.5 整理出的可编译、有中文文档的干净基线（修复编译问题、新增编译脚本与说明文档），作为后续开发的起点；`v2.0-aht20` 在其基础上新增 AHT20 温湿度传感器支持（见第 7 章），最新 `v2.1-aht20` 在此基础上新增温湿度探测模式（见第 6 章使用指南）。`v3.0-autoretract` 起引入双开关自动回抽（用 S2 自动判定料根，见第 6.3 节）；`v3.1-autoretract` 修复双开关自动回抽退料后不自动送料（详见第 6.3 节与第 13 章）；**`v3.2.1-fix105` 为当前最新，专修 AHT20 温湿度传感器驱动缺陷**（见第 12 章 AHT20 驱动修复）；`v3.2-fix105` 仅修 bug、不改功能——① 打印机发暂停/停止时 BMCU 若正在送料会立即停机（不再无视指令继续转），② 进料电机控制改为「黄灯三步法」避让（顶满先中力推 2s → 轻压 3s → 超 5s 才报真堵红灯），见第 6.2 节与第 13 章。`v4.0-tpu` 分支在 TPU 软料送料（见第 14 章）之外，**新增 SSD1306 OLED 状态屏支持（`BMCU_OLED`，复用 AHT20 软件 I2C 总线，见第 15 章）**。回退到基线：`git checkout v1.0-baseline`。使用与固件选型见 [`BMCU使用指南.md`](./BMCU使用指南.md)。
 
-> **上报版本名 `AMS08` ↔ `N3F05` 的来龙去脉**：固件向打印机上报的"型号名"字段（`long_packge_version_version_and_name_AMS08[]`，`bambu_bus_ams.cpp`，`0x103` 版本包）在 V2.1 及以前是 `AMS08`，打印机不会拉黑但不显示环境温湿度具体数值；`v3.1-autoretract` 中曾把它改成 `N3F05` 以便 Bambu Studio 显示温湿度数值，但实测运行两次即被打印机拉黑，故 **`v3.2-fix105` 改回 `AMS08`**（上报号仍保持 `10.50`）。如需显示数值的 `N3F05` 方案需另行解决被拉黑问题，目前不采用。
+> **上报版本名 `AMS08` ↔ `N3F05` 的来龙去脉**：固件向打印机上报的"型号名"字段（`long_packge_version_version_and_name_AMS08[]`，`bambu_bus_ams.cpp`，`0x103` 版本包）在 V2.1 及以前是 `AMS08`，打印机不会拉黑但不显示环境温湿度具体数值；`v3.1-autoretract` 中曾把它改成 `N3F05` 以便 Bambu Studio 显示温湿度数值，但实测运行两次即被打印机拉黑，故 **`v3.2-fix105` 改回 `AMS08`**（上报号仍保持 `10.50`）。如需显示数值的 `N3F05` 方案需另行解决被拉黑问题。
+>
+> **v4.0-tpu 分支重新启用 `N3F05`**：本分支（TPU 送料 + OLED 屏专用）再次把型号名改回 `N3F05`，以让 Bambu Studio 显示温湿度数值（配合 OLED 屏的温湿度页）。被拉黑问题在 TPU 测试环境未复现，故采用；若后续重测仍被拉黑，可在 `bambu_bus_ams.cpp` 改回字节 `0x41,0x4D,0x53,0x30,0x38`（变量名无需改）。
 
 ---
 
@@ -157,7 +159,7 @@ main.cpp              初始化 + 主循环（调度总线/运动/LED）
 | `0x21A` | MC_online | `get_package_long_packge_MC_online` |
 | `0x211` | read_filament_info | `get_package_long_packge_filament` → 回传 filament 元数据 |
 | `0x218` | set_filament_info_type2 | `get_package_set_filament_type2` → 接收元数据(长格式) |
-| `0x103` | version | `get_package_long_packge_version` → 回传版本/名称 `AMS08` |
+| `0x103` | version | `get_package_long_packge_version` → 回传版本/名称（v4.0-tpu 为 `N3F05`，其它版本 `AMS08`） |
 | `0x402` | serial_number | `get_package_long_packge_serial_number` → 回传 SN |
 
 #### BMCU 回复包（BMCU→打印机）
@@ -1030,6 +1032,61 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
 
 ---
 
+### 14.13 并联嗅探判定打印完成 + 自动复位 + 进料低速锁死修复（解决"退料后误重启"与"进料没反应"）
+
+> 本节记录 `dev/v4.0-tpu` 分支针对两点问题的开发：① 原"退料完成 + 30 秒"判定打印成功的方案不可靠（换料/并联切换都会退料），改为**嗅探 485 总线上所有 AMS 状态**判定"真完成"并定时软复位；② 实测"自吸正常但进料没反应"，根因是 on_use 低缓冲检测零延迟瞬时锁死。
+
+#### 14.13.1 背景与决策
+
+- **原方案缺陷**：靠"本机退料完成 + 30 秒空闲"判定打印成功不可行——换料、并联切换都会触发退料，单台退料后 30 秒就软复位会误杀正在工作的并联设备。
+- **大佬指点**：485 总线能读到所有 AMS/BMCU 的状态，并联工作中不会复位。故改为**嗅探总线上其它 AMS 的 motion 状态**，仅在"本机全 idle + 总线上所有 AMS 全 idle"时才认为打印真完成。
+- **型号字符串**：v4.0-tpu 把上报型号名由 `AMS08` 改回 `N3F05`（`bambu_bus_ams.cpp`，`0x103` 版本包），以便 Bambu Studio 显示温湿度数值（第 1 章所述 v3.2 回退到 AMS08 是旧版本决策，本分支重新启用 N3F05）。
+
+#### 14.13.2 并联嗅探机制（`ahub_bus.cpp` / `ahub_bus.h`）
+
+- 在 `ahubus_run()` 收到 `0x33` 帧处新增 `ahubus_sniff_other_ams(buf)`：仅解析**从机响应**（`buf[0]==0x33 && buf[7]==0x01`）的 `filament_stu` / `all_filament_stu` 查询包，提取其它 AMS 的 4 通道 motion 状态。
+- 解析地址：`adr = buf[6] >> 4`（xMCU 模式下高 4 位为 AMS 物理号），跳过本机（`BAMBU_BUS_AMS_NUM`）与未定义槽位，写入全局表 `g_other_ams_motion[ams_max_number][4]` 并置 `g_other_ams_seen[adr]=1`。
+- 新增 `all_remote_ams_all_idle()`：遍历嗅探表，仅对"已嗅探到 + 非本机"的 AMS 判定——任一通道 `motion != idle` 即返回 false，全部 idle 才返回 true（没嗅探到的 AMS 视为不参与、不阻断）。
+- 头文件 `ahub_bus.h` 顶部 `#include "ams.h"` 以拿到 `ams_max_number`。
+
+#### 14.13.3 打印完成状态机 + 假离线软复位（`main.cpp` / `_bus_hardware.cpp`）
+
+- `bambu_bus_ams.cpp` 的 `before_pull_back` 分支置位 `g_local_pullback_seen`（作为"本机发生过退料"的起点标志）。
+- `main.cpp` 主循环末尾新增状态机（由 `g_pd_state` 三态驱动）：
+  - `idle`：消费 `g_local_pullback_seen` → 进入 `waiting_idle`，记录 `g_pd_t0_ms`。
+  - `waiting_idle`：若本机任一通道非 idle **或** `all_remote_ams_all_idle()` 为假 → 取消回 `idle`（有 AMS 在工作，避免误复位）；否则本机+总线全 idle 持续 **30 秒** → 进入 `fake_offline` 并调 `bus_host_disconnect()`（关 USART1，打印机判掉线）。
+  - `fake_offline`：假离线 **10 秒**后 `NVIC_SystemReset()` 软复位（等效拔插后重连）。
+- `_bus_hardware.cpp` 新增 `bus_host_disconnect()`（USART_Cmd DISABLE + 关 RXNE 中断）/ `bus_host_reconnect()`，在 `bus_hardware.h` 声明，实现"假离线"模拟拔插。
+
+#### 14.13.4 进料低速锁死修复（`Motion_control.cpp`）
+
+- **现象**：自吸（DM 分支）正常，但打印机下发 `on_use` 进料"没反应"。
+- **根因**：原 `on_use` 低缓冲检测是**零延迟瞬时锁死**——`pct < 40%` 立即置 `g_on_use_low_latch` / `g_on_use_jam_latch`，且清除条件要求 `!jam_latch` 而同时已置 `jam`，导致空通道/刚自吸后缓冲压力偏低时**永久锁死**，电机停转、进料无反应。
+- **修复**：新增每通道计时器 `g_on_use_low_us[4]`，改为**持续累计 8 秒**才判定锁死：
+  ```cpp
+  if (pct < 40.0f && on_use_need_move)
+  {
+      const uint32_t add_us = (uint32_t)(time_E * 1000000.0f + 0.5f);
+      uint32_t t1 = g_on_use_low_us[CHx] + add_us;
+      if (t1 > 20000000u) t1 = 20000000u;
+      g_on_use_low_us[CHx] = t1;
+      if (t1 >= 8000000u) { g_on_use_low_latch[CHx]=1u; g_on_use_jam_latch[CHx]=1u; }
+  }
+  else { g_on_use_low_us[CHx] = 0u; /* 正常推力 */ }
+  ```
+  正常送料瞬间的低缓冲不再误锁死，只有持续 8 秒低缓冲（真堵/真卡）才锁死报红灯。
+
+#### 14.13.5 自动重启总开关（测试期可关）
+
+- **新增源码开关宏 `BMCU_AUTO_REBOOT_ENABLE`**（定义在 `bambu_bus_ams.h` 顶部，`main.cpp` 已 include 该头文件，两文件共用）。
+- 默认 `0`（**当前 TPU 测试阶段临时关闭**，不动编译脚本）。正式版改 `1` 即重新开启自动重启。
+- 关闭时：`main.cpp` 的状态机整段 + 相关全局变量声明、以及 `bambu_bus_ams.cpp` 的 `g_local_pullback_seen` 置位/extern 均被 `#if BMCU_AUTO_REBOOT_ENABLE` 包住，编译期完全跳过，无未使用警告、无悬空符号。
+- 该开关与 OLED 调试开关、`BMCU_OLED` 总开关、温湿度模拟探测开关并列，属于"需手动改源码"的开关之一（见 16.3）。
+
+> **改动文件汇总**：`ahub_bus.cpp`（嗅探+判定）、`ahub_bus.h`（声明+include）、`main.cpp`（状态机+开关）、`bambu_bus_ams.cpp`（退料标志置位+型号 N3F05+开关）、`_bus_hardware.cpp/.h`（假离线接口）、`Motion_control.cpp`（8 秒累计锁死修复）。
+
+---
+
 ## 15. SSD1306 OLED 状态屏（`BMCU_OLED`，v4.0-tpu 新增）
 
 > 本节记录 `dev/v4.0-tpu` 分支新增的 SSD1306 OLED 显示支持。它通过**复用 AHT20 的软件 I2C 总线**（PB10/PB11）显示 BMCU 当前状态（温湿度、通讯状态、四通道料况），不上机也能肉眼看到 BMCU 状态。
@@ -1184,6 +1241,12 @@ AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_
    #define SIM_AHB_PROBE_ENABLE 0   // ← 改 1 开启（调试用，非编译宏）
    ```
    `1`=开启后，每次响应打印机查询时自增温湿度使屏幕显示随查询周期跳变，便于测量打印机拉取周期；`0`=关闭（函数为空操作）。直接改这一行重编即可，对所有编译方式通用，无需命令行或平台传参。
+
+4. **自动重启（打印完成软复位）总开关** — `src/bambu_bus_ams.h` 顶部
+   ```c
+   #define BMCU_AUTO_REBOOT_ENABLE 0   // ← 改 1 开启自动重启；当前 TPU 测试期临时关
+   ```
+   `1`=开启后，本机退料 + 本机及总线所有 AMS 全 idle 持续 30s → 假离线 10s → 软复位（见 14.13）；`0`=关闭，TPU 测试阶段不自动重启、方便反复上料调试。该宏定义在共享头文件，`main.cpp` 与 `bambu_bus_ams.cpp` 共用，改一处即全工程生效，**不动编译脚本**。
 
 ### 16.4 编译宏一览（均由脚本注入，勿手改）
 

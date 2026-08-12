@@ -62,6 +62,8 @@ static uint8_t g_state_dirty = 0;
 //   触发条件: 本机发生过退料(pullback) + 本机所有通道 idle + 总线上所有 AMS 所有通道均 idle + 持续 30s
 //   -> 假离线 10s -> NVIC_SystemReset()
 //   由 bambu_bus_ams.cpp 的 set_motion(before_pull_back) 置位 g_local_pullback_seen
+//   由 BMCU_AUTO_REBOOT_ENABLE(bambu_bus_ams.h) 控制开关
+#if BMCU_AUTO_REBOOT_ENABLE
 volatile uint8_t g_local_pullback_seen = 0u;
 enum class print_done_state : uint8_t
 {
@@ -71,6 +73,7 @@ enum class print_done_state : uint8_t
 };
 static print_done_state   g_pd_state = print_done_state::idle;
 static uint64_t           g_pd_t0_ms = 0u;   // 进入 waiting_idle / fake_offline 的时间戳
+#endif // BMCU_AUTO_REBOOT_ENABLE
 
 static inline void ram_to_flashinfo(uint8_t fil, Flash_FilamentInfo* o)
 {
@@ -513,6 +516,8 @@ int main(void)
 
         // ===== v4.0-tpu 方案A: 打印完成后定时软复位(模拟拔插) =====
         // 判定"打印真完成": 本机全 idle + 总线所有 AMS 全 idle(并联切换时另一台在工作则不触发)
+        // 由 BMCU_AUTO_REBOOT_ENABLE(bambu_bus_ams.h) 控制开关, TPU 测试阶段临时关闭
+#if BMCU_AUTO_REBOOT_ENABLE
         {
             static bool g_pd_local_idle = false;
             static bool g_pd_remote_idle = false;
@@ -570,6 +575,7 @@ int main(void)
                 break;
             }
         }
+#endif // BMCU_AUTO_REBOOT_ENABLE
 
         Motion_control_run(error);
         RGB_update();

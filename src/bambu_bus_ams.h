@@ -1,6 +1,11 @@
 #pragma once
 #include <stdint.h>
 
+// v4.0-tpu 方案A: 打印完成后定时软复位(模拟拔插) 总开关
+//   正式版保持开启(=1); TPU 测试阶段临时关闭(=0), 不动编译脚本
+//   注意: 改这里即全工程生效(main.cpp / bambu_bus_ams.cpp 共用)
+#define BMCU_AUTO_REBOOT_ENABLE 0
+
 enum class bambubus_package_type
 {
     error = -1,

@@ -12,7 +12,10 @@
 
 // v4.0-tpu 方案A: 本机发生退料(before_pull_back)时置位, 作为"打印完成检测"的起点
 // 主循环 main.cpp 看到它 + 本机全 idle + 总线所有 AMS 全 idle + 持续 30s 后触发定时软复位
+// 由 BMCU_AUTO_REBOOT_ENABLE(bambu_bus_ams.h) 控制开关
+#if BMCU_AUTO_REBOOT_ENABLE
 extern volatile uint8_t g_local_pullback_seen;
+#endif
 
 uint8_t bambubus_ams_map[4] = {0, 1, 2, 3};
 static void bambubus_build_static_serial(void);
@@ -409,7 +412,9 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
             ams_ptr->filament_use_flag = 0x04;
             ams_ptr->pressure = 0x2B00;
 
+#if BMCU_AUTO_REBOOT_ENABLE
             g_local_pullback_seen = 1u;   // v4.0-tpu 方案A: 标记本机刚发生退料
+#endif
             ams_state_set_unloaded(ch);
         }
         else if (statu_flags == 0x09)
