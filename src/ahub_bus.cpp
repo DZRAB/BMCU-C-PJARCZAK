@@ -351,6 +351,47 @@ void ahubus_slave_get_package_set(uint8_t *buf)
     bus_port_to_host.send_data_len = ahubus_package_add_crc(out);
 }
 
+// v4.0-tpu 方案A: 嗅探总线上其它 AMS/BMCU 的 motion
+// 总线上所有 AMS 都会周期性被打印机查询 filament_stu(0x04), 各自回响应(响应包 buf[7]==0x01)。
+// BMCU 物理上能听到每个响应(USART1 RX 不过滤地址), 从中扒出每 AMS 每通道的 motion(低7位),
+// 存进全局表。判定"打印完成"时: 本机所有通道 idle 且 所有嗅探到的别的 AMS 也全 idle, 才算真完成。
+// 这样并联两台 BMCU 时, 当前台被切换走退料, 只要另一台仍在 on_use(响应里 motion!=idle), 本机不误触发复位。
+uint8_t g_other_ams_motion[ams_max_number][4] = {{0xFFu,0xFFu,0xFFu,0xFFu},{0xFFu,0xFFu,0xFFu,0xFFu},{0xFFu,0xFFu,0xFFu,0xFFu},{0xFFu,0xFFu,0xFFu,0xFFu}};
+uint8_t g_other_ams_seen[ams_max_number]      = {0u, 0u, 0u, 0u};
+
+void ahubus_sniff_other_ams(uint8_t* buf)
+{
+    if (buf == nullptr) return;
+    if (buf[0] != 0x33) return;
+    if (buf[7] != 0x01) return;                                   // 仅处理 slave 响应(本机发的/打印机的 query 无此标志)
+    if (buf[5] != (uint8_t)ahubus_query_type::filament_stu) return; // 只看单 AMS 的 filament_stu 响应
+
+    uint8_t adr = (uint8_t)(buf[6] >> 4);                          // xMCU 总线编码: 高4位=AMS物理号
+    if (adr >= ams_max_number) return;
+    if (adr == (uint8_t)BAMBU_BUS_AMS_NUM) return;                 // 本机不管
+
+    g_other_ams_seen[adr] = 1u;
+    const uint8_t* d = buf + 8;                                    // data_ptr(=buf+4) + 4 = 4 通道 stu8 起始
+    for (uint8_t ch = 0u; ch < 4u; ch++)
+        g_other_ams_motion[adr][ch] = (uint8_t)(d[ch * 8u + 0u] & 0x7Fu); // stu8[0]=motion|online位
+}
+
+bool all_remote_ams_all_idle(void)
+{
+    for (uint8_t adr = 0u; adr < ams_max_number; adr++)
+    {
+        if (adr == (uint8_t)BAMBU_BUS_AMS_NUM) continue;          // 跳过本机
+        if (g_other_ams_seen[adr] == 0u) continue;                 // 总线无此设备(并联未接) -> 忽略
+        for (uint8_t ch = 0u; ch < 4u; ch++)
+        {
+            const uint8_t m = g_other_ams_motion[adr][ch];
+            if (m != (uint8_t)_filament_motion::idle)
+                return false;                                      // 有别的 AMS 某通道仍在送料 -> 打印在进行
+        }
+    }
+    return true;
+}
+
 ahubus_package_type ahubus_run()
 {
     ahubus_package_type package_type = ahubus_package_type::none;
@@ -374,6 +415,9 @@ ahubus_package_type ahubus_run()
     {
         if (buf != nullptr && rx_len <= 1280 && buf[0] == 0x33)
         {
+            // v4.0-tpu 方案A: 旁路嗅探 —— 不管本机是否应答, 先把"其它 AMS 的响应"里的 motion 扒出来
+            ahubus_sniff_other_ams(buf);
+
             package_type = ahubus_get_package_type(buf);
 
             switch (package_type)

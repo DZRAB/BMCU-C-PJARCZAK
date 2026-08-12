@@ -30,6 +30,20 @@ void bus_init()
     bus_uart1_init();
 }
 
+// v4.0-tpu 方案A: 假离线 —— 关 USART1(停止收发+停 RX 中断), 打印机判定 BMCU 掉线; 主要用于"打印完成定时软复位"前模拟拔插
+void bus_host_disconnect(void)
+{
+    USART_Cmd(USART1, DISABLE);            // 停收发包, RX 中断不再产生 -> 打印机视为掉线
+    USART_ITConfig(USART1, USART_IT_RXNE, DISABLE);
+}
+
+// v4.0-tpu 方案A: 恢复在线 —— 重新使能 USART1(相当于给打印机重新插上 BMCU)
+void bus_host_reconnect(void)
+{
+    USART_ITConfig(USART1, USART_IT_RXNE, ENABLE);
+    USART_Cmd(USART1, ENABLE);
+}
+
 void bus_uart1_init()
 {
     GPIO_InitTypeDef GPIO_InitStructure = {0};

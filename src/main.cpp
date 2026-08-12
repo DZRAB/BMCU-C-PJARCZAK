@@ -58,6 +58,20 @@ static uint8_t g_fil_dirty = 0;
 static uint8_t g_loaded_ch = 0xFF;
 static uint8_t g_state_dirty = 0;
 
+// v4.0-tpu 方案A: 打印完成后定时软复位(模拟拔插)相关状态
+//   触发条件: 本机发生过退料(pullback) + 本机所有通道 idle + 总线上所有 AMS 所有通道均 idle + 持续 30s
+//   -> 假离线 10s -> NVIC_SystemReset()
+//   由 bambu_bus_ams.cpp 的 set_motion(before_pull_back) 置位 g_local_pullback_seen
+volatile uint8_t g_local_pullback_seen = 0u;
+enum class print_done_state : uint8_t
+{
+    idle = 0,        // 未触发(无 pullback 或未满足 idle 条件)
+    waiting_idle,    // 等本机+总线全 idle 累计 30s
+    fake_offline,    // 假离线 10s 中
+};
+static print_done_state   g_pd_state = print_done_state::idle;
+static uint64_t           g_pd_t0_ms = 0u;   // 进入 waiting_idle / fake_offline 的时间戳
+
 static inline void ram_to_flashinfo(uint8_t fil, Flash_FilamentInfo* o)
 {
     const _filament* f = &ams[BAMBU_BUS_AMS_NUM].filament[fil];
@@ -496,6 +510,66 @@ int main(void)
             }
         }
 #endif // BMCU_OLED
+
+        // ===== v4.0-tpu 方案A: 打印完成后定时软复位(模拟拔插) =====
+        // 判定"打印真完成": 本机全 idle + 总线所有 AMS 全 idle(并联切换时另一台在工作则不触发)
+        {
+            static bool g_pd_local_idle = false;
+            static bool g_pd_remote_idle = false;
+
+            // 本机所有通道 idle 判定
+            g_pd_local_idle = true;
+            for (uint8_t ch = 0u; ch < 4u; ch++)
+            {
+                const _filament_motion m = ams[BAMBU_BUS_AMS_NUM].filament[ch].motion;
+                if (m != _filament_motion::idle)
+                {
+                    g_pd_local_idle = false;
+                    break;
+                }
+            }
+            // 总线上所有其它 AMS 全 idle 判定(嗅探)
+            g_pd_remote_idle = all_remote_ams_all_idle();
+
+            const uint64_t now_ms = time_ms64();
+
+            switch (g_pd_state)
+            {
+            case print_done_state::idle:
+                if (g_local_pullback_seen != 0u)
+                {
+                    g_local_pullback_seen = 0u;       // 消费掉触发标志
+                    g_pd_state = print_done_state::waiting_idle;
+                    g_pd_t0_ms = now_ms;
+                }
+                break;
+
+            case print_done_state::waiting_idle:
+                if (!g_pd_local_idle || !g_pd_remote_idle)
+                {
+                    // 任一 AMS 又开始送料(或收到新送料) -> 取消, 回到 idle(避免误复位)
+                    g_pd_state = print_done_state::idle;
+                }
+                else if ((now_ms - g_pd_t0_ms) >= 30000ull)   // 本机+总线全 idle 持续 30s
+                {
+                    g_pd_state = print_done_state::fake_offline;
+                    g_pd_t0_ms = now_ms;
+                    bus_host_disconnect();                    // 假离线: 关 USART1, 打印机判掉线
+                }
+                break;
+
+            case print_done_state::fake_offline:
+                if ((now_ms - g_pd_t0_ms) >= 10000ull)        // 假离线 10s
+                {
+                    NVIC_SystemReset();                       // 软复位, 相当于拔插后重连
+                }
+                break;
+
+            default:
+                g_pd_state = print_done_state::idle;
+                break;
+            }
+        }
 
         Motion_control_run(error);
         RGB_update();

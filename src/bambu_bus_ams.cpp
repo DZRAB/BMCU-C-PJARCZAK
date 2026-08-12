@@ -10,6 +10,10 @@
 #include "motion_control.h"
 #include "oled/ssd1306_oled.h"   // v4.0 OLED：动作覆盖显示 notify_action
 
+// v4.0-tpu 方案A: 本机发生退料(before_pull_back)时置位, 作为"打印完成检测"的起点
+// 主循环 main.cpp 看到它 + 本机全 idle + 总线所有 AMS 全 idle + 持续 30s 后触发定时软复位
+extern volatile uint8_t g_local_pullback_seen;
+
 uint8_t bambubus_ams_map[4] = {0, 1, 2, 3};
 static void bambubus_build_static_serial(void);
 static uint32_t bambubus_heartbeat_deadline = 0u;
@@ -405,6 +409,7 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
             ams_ptr->filament_use_flag = 0x04;
             ams_ptr->pressure = 0x2B00;
 
+            g_local_pullback_seen = 1u;   // v4.0-tpu 方案A: 标记本机刚发生退料
             ams_state_set_unloaded(ch);
         }
         else if (statu_flags == 0x09)
@@ -1131,8 +1136,8 @@ void get_package_long_packge_serial_number(unsigned char *buf, int length)
 //0x46 // 70
 //0x50 // 80
 //0x5A // 90
-unsigned char long_packge_version_version_and_name_AMS08[] = {0x00, 0x00, 0x32, 0x0A , // verison number
-                                                             0x41, 0x4D, 0x53, 0x30, 0x38, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+unsigned char long_packge_version_version_and_name_N3F05[] = {0x00, 0x00, 0x32, 0x0A , // verison number
+                                                             0x4E, 0x33, 0x46, 0x30, 0x35, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 //unsigned char long_packge_version_version_and_name_AMS2PRO[] = {
 //    0x00, 0x00, 0x00, 0x5A,
 //    0x4E, 0x33, 0x46, 0x30, 0x35, 0x00, 0x00, 0x00,
@@ -1151,11 +1156,11 @@ void get_package_long_packge_version(unsigned char *buf, int length)
     if (ams_num != fixed_ams_num || ams[bambubus_ams_map[fixed_ams_num]].online != true)
         return;
 
-    long_packge_version_version_and_name_AMS08[sizeof(long_packge_version_version_and_name_AMS08) - 1u] = fixed_ams_num;
+    long_packge_version_version_and_name_N3F05[sizeof(long_packge_version_version_and_name_N3F05) - 1u] = fixed_ams_num;
 
     bambubus_long_packge_data data;
-    data.datas = long_packge_version_version_and_name_AMS08;
-    data.data_length = (uint16_t)sizeof(long_packge_version_version_and_name_AMS08);
+    data.datas = long_packge_version_version_and_name_N3F05;
+    data.data_length = (uint16_t)sizeof(long_packge_version_version_and_name_N3F05);
     data.package_number = printer_data_long.package_number;
     data.type = printer_data_long.type;
     data.source_address = printer_data_long.target_address;

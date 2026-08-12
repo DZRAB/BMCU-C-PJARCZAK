@@ -189,6 +189,7 @@ static uint8_t  MC_ONLINE_key_stu[4]    = {0, 0, 0, 0};
 static uint8_t  g_on_use_low_latch[4]   = {0, 0, 0, 0};   // 1=stop motor latch
 static uint8_t  g_on_use_jam_latch[4]   = {0, 0, 0, 0};   // 1=real jam -> 0xF06F
 static uint32_t g_on_use_hi_pwm_us[4]   = {0u, 0u, 0u, 0u};
+static uint32_t g_on_use_low_us[4]      = {0u, 0u, 0u, 0u}; // v4.0-tpu 修复: 缓冲持续过低(空/堵)累计微秒, 需持续才锁死
 static uint32_t g_on_use_full_ms[4]     = {0u, 0u, 0u, 0u}; // v3.2: 缓冲顶满持续毫秒(黄灯三步法)
 static uint8_t  g_dm_autoload_stop_req[4] = {0u, 0u, 0u, 0u}; // v3.2: 打印机暂停/停止时请求中止 DM 自动装载送料
 
@@ -835,6 +836,8 @@ public:
             g_on_use_low_latch[CHx] = 0u;
             g_on_use_hi_pwm_us[CHx] = 0u;
         }
+        // v4.0-tpu: 离开 on_use 时一并清"低缓冲累计计时", 避免下次进 on_use 残留旧值误杀
+        g_on_use_low_us[CHx] = 0u;
 
         pwm_zeroed = 0;
 
@@ -2094,13 +2097,25 @@ public:
             {
                 const float pct = MC_PULL_pct_f[CHx];
 
-                if (pct < 40.0f)
+                // v4.0-tpu 修复(关键): 原逻辑"pct<40 即时锁死"会导致空通道/刚自吸后
+                // (缓冲头 pct 必然 <40) 一进 on_use 就被永久判堵料红灯、电机永不转("进料没反应")。
+                // 改为需"确实在往前推(on_use_need_move)且 pct 持续过低"累计达到门槛才锁死,
+                // 与下方"顶满 20s"判定对称, 避免首帧低 pct 误杀。缺口累计在 832 行离开 on_use 时清。
+                if (pct < 40.0f && on_use_need_move)
                 {
-                    g_on_use_low_latch[CHx] = 1u;
-                    g_on_use_jam_latch[CHx] = 1u;
+                    const uint32_t add_us = (uint32_t)(time_E * 1000000.0f + 0.5f);
+                    uint32_t t1 = g_on_use_low_us[CHx] + add_us;
+                    if (t1 > 20000000u) t1 = 20000000u;
+                    g_on_use_low_us[CHx] = t1;
+                    if (t1 >= 8000000u)   // 持续 8s 推料但缓冲仍空 -> 真堵/真没料
+                    {
+                        g_on_use_low_latch[CHx] = 1u;
+                        g_on_use_jam_latch[CHx] = 1u;
+                    }
                 }
                 else
                 {
+                    g_on_use_low_us[CHx] = 0u;   // 正常(缓冲够/没在推)则清零, 不误杀
                     const int pwm_cmd = pwm_out0;
                     const int ax = (pwm_cmd < 0) ? -pwm_cmd : pwm_cmd;
 

@@ -204,6 +204,8 @@ public:
 
 extern _bus_port_deal bus_port_to_host;
 extern void bus_init();
+extern void bus_host_disconnect(void);   // v4.0-tpu 方案A: 假离线(关 USART1)
+extern void bus_host_reconnect(void);    // v4.0-tpu 方案A: 恢复在线(开 USART1)
 
 #define host_device_type_none 0x0000
 #define host_device_type_ahub 0x0001
