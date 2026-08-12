@@ -234,7 +234,13 @@ static constexpr float    DM_AUTO_PWM_PULL             = 900.0f;   // retract st
 // 空通道首次自吸统一最软力：用户要求空通道第一次装料自吸力四通道一致、不随设置料变化。
 // 不设成刚性900(避免硬拽软料), 也不按写死表分通道(避免设TPU后吸不动); 取能稳定自吸的软力。
 // 初校值: 实测刚性900能吸、初版写死表180~300吸不动, 取折中保底能吸。机台实测可再调。
-static constexpr float    DM_AUTO_PWM_PUSH_EMPTY       = 600.0f;   // 空通道统一最软自吸力
+// v4.0-tpu: 空通道首料自吸 PWM(四通道统一,不随设置料变化——用户硬要求)。
+// 这是"自吸调速旋钮":自吸是往空管里第一次把料吸进来,料还没进缓冲头高压区,
+// 持续推比间歇更合理也更有效(见下方间歇门控对自吸的排除),故此处即有效推力。
+// 初校 750(原 600 偏软且被间歇砍占空比导致"自吸很慢");机台实测可整体上下调。
+// 注意:此值仅作用于空通道首料;设好 TPU 后的正式送料走 tpu_params 参数表的
+// feed_pwm_lo(700~850),与此值无关,两者互不干扰。
+static constexpr float    DM_AUTO_PWM_PUSH_EMPTY       = 750.0f;   // 空通道统一自吸力(调速旋钮)
 static constexpr float    DM_AUTO_PWM_PULL_EMPTY       = 600.0f;   // 空通道统一最软回抽力
 static constexpr float    DM_AUTO_IDLE_LIM             = 950.0f;   // clamp only during autoload
 
@@ -2159,12 +2165,24 @@ public:
             static float tpu_pwm_ramp[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             if (tpu_p_run != nullptr)
             {
-                const uint16_t cyc = tpu_p_run->push_cycle_ms;
-                const uint16_t on  = tpu_p_run->push_on_ms;
+                // v4.0-tpu: 全局调速宏(见 tpu_params.h 顶部 TPU_SPEED_* 段)——
+                // 后面想整体加快/放慢, 改这两个宏(或 build 注入)即可, 无需动 6 行参数表。
+                uint16_t cyc = tpu_p_run->push_cycle_ms;
+                uint16_t on  = tpu_p_run->push_on_ms;
+#if (TPU_SPEED_CYCLE_MS_OVERRIDE + 0) > 0
+                cyc = (uint16_t)TPU_SPEED_CYCLE_MS_OVERRIDE;
+#endif
+#if (TPU_SPEED_ON_RATIO_PCT + 0) > 0
+                // 整数百分数 → 推窗口时长(运行期计算, 强制留停窗口)
+                on = (uint16_t)((uint32_t)cyc * (uint32_t)TPU_SPEED_ON_RATIO_PCT / 100u);
+                if (on >= cyc) on = (uint16_t)(cyc - 1u);
+#endif
                 if (cyc > 0u && on < cyc)
                 {
                     const uint32_t phase = (uint32_t)(now_ms % (uint64_t)cyc);
-                    if (feeding_fwd)
+                    // 自吸(DM 自动装载)不进间歇门控: 空管首料持续推更稳更快,
+                    // 料未入缓冲头高压区, 不存在"持续顶被压缩挤出"问题。
+                    if (feeding_fwd && !dm_autoload_active)
                     {
                         // 推窗口(phase<on)目标=原pwm_out0(给足), 停窗口目标=0(电机靠齿槽保持力不倒退)
                         const float tgt = (phase < (uint32_t)on) ? (float)pwm_out0 : 0.0f;
