@@ -229,8 +229,13 @@ static constexpr float    DM_AUTO_S2_TARGET_M          = 0.120f;   // 120mm
 static constexpr float    DM_AUTO_BUF_ABORT_PCT        = 75.0f;    // abort push
 static constexpr float    DM_AUTO_BUF_RECOVER_PCT      = 50.2f;    // retract-to (try 1/2)
 static constexpr uint64_t DM_AUTO_FAIL_EXTRA_MS        = 1500ull;  // extra retract after fail
-static constexpr float    DM_AUTO_PWM_PUSH             = 900.0f;   // push strength
-static constexpr float    DM_AUTO_PWM_PULL             = 900.0f;   // retract strength
+static constexpr float    DM_AUTO_PWM_PUSH             = 900.0f;   // push strength (刚性)
+static constexpr float    DM_AUTO_PWM_PULL             = 900.0f;   // retract strength (刚性)
+// 空通道首次自吸统一最软力：用户要求空通道第一次装料自吸力四通道一致、不随设置料变化。
+// 不设成刚性900(避免硬拽软料), 也不按写死表分通道(避免设TPU后吸不动); 取能稳定自吸的软力。
+// 初校值: 实测刚性900能吸、初版写死表180~300吸不动, 取折中保底能吸。机台实测可再调。
+static constexpr float    DM_AUTO_PWM_PUSH_EMPTY       = 600.0f;   // 空通道统一最软自吸力
+static constexpr float    DM_AUTO_PWM_PULL_EMPTY       = 600.0f;   // 空通道统一最软回抽力
 static constexpr float    DM_AUTO_IDLE_LIM             = 950.0f;   // clamp only during autoload
 
 enum : uint8_t
@@ -1108,10 +1113,10 @@ public:
             else if (F.filament_type == _filament_type::unknown &&
                      filament_channel_inserted[CHx])
             {
-                // 空通道首料：BMCU 还不知道插的是啥料，用刚性常量(PWM 上限900/速度60/
-                // 连续转)把料可靠吸进来，不能套用 85A 最软项(180力+间歇门控)——力太小
-                // 连 PLA/PETG 都推不动、电机看似不转。装进来后若本地型号是 TPU，on_use/
-                // 打印过程会切到 TPU 软参数(间歇门控在那阶段保护软料)。
+                // 空通道首料：filament_type 还没识别/没设, 这里 tpu_p 保持 nullptr(走刚性常量)。
+                // 注意: 用户要的"空通道首料按最软料进/自吸"已在 DM 自动装载分支用统一最软力
+                // DM_AUTO_PWM_PUSH_EMPTY 实现(四通道一致、不随设置料变化), 不在此处套写死表。
+                // 写死表 tpu_param_fixed 仅在该通道被打印机设为 TPU(filament_type==tpu)后生效。
                 tpu_p = nullptr;
             }
         }
@@ -1151,11 +1156,16 @@ public:
         if (motion == filament_motion_enum::filament_motion_pressure_ctrl_idle)
         {
         #if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
-                    // v4.0-tpu: DM 自动装载(手动压/拽缓冲头触发的首次装填)也要按 TPU 降级推力。
-                    // 注意: 前提是本通道已被打印机设为 TPU(filament_type==tpu, tpu_p 非空);
-                    // 否则 tpu_p==nullptr, 仍用刚性 900, 体现"软料识别后才降级"。
-                    const float dm_push_pwm = tpu_p ? tpu_p->feed_pwm_lo : DM_AUTO_PWM_PUSH;
-                    const float dm_pull_pwm = tpu_p ? tpu_p->feed_pwm_lo : DM_AUTO_PWM_PULL;
+                    // 空通道首次自吸: 用户明确要求自吸力四通道一致、不受设置料(TPU/PETG)影响。
+                    // 故空通道(dm_loaded==0 或 filament_type==unknown)一律用统一最软自吸力,
+                    // 既不用刚性900(避免硬拽), 也不按写死表分通道(避免设TPU后吸不动)。
+                    // 写死表 tpu_p 只在"已识别为TPU且非首料"的正式送料/间歇门控才生效。
+                    const bool empty_channel = (dm_loaded[CHx] == 0u) ||
+                                                (ams[motion_control_ams_num].filament[CHx].filament_type == _filament_type::unknown);
+                    const float dm_push_pwm = empty_channel ? DM_AUTO_PWM_PUSH_EMPTY
+                                                            : (tpu_p ? tpu_p->feed_pwm_lo : DM_AUTO_PWM_PUSH);
+                    const float dm_pull_pwm = empty_channel ? DM_AUTO_PWM_PULL_EMPTY
+                                                            : (tpu_p ? tpu_p->feed_pwm_lo : DM_AUTO_PWM_PULL);
                     // --- DM 自动装载（阶段1 + 阶段2）---
                     if (filament_channel_inserted[CHx] && (dm_loaded[CHx] == 0u))
                     {
