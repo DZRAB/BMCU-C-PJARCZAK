@@ -250,6 +250,7 @@ static uint8_t  dm_fail_latch[4]        = {0,0,0,0};   // latch until ks==0 (<0.
 static uint8_t  dm_auto_state[4]        = {0,0,0,0};
 static uint8_t  dm_autoload_gate[4]     = {0,0,0,0}; // 0=allow Stage1, 1=block Stage1 until idle+ks==0
 static uint8_t  dm_auto_try[4]          = {0,0,0,0};   // abort count (stage2)
+static uint16_t dm_buf_over_cnt[4]      = {0,0,0,0};   // v4.0-tpu: 软料缓冲持续超阈计数(防单次虚高误 abort)
 static uint64_t dm_auto_t0_ms[4]        = {0ull,0ull,0ull,0ull};
 static float    dm_auto_remain_m[4]     = {0,0,0,0};
 static float    dm_auto_last_m[4]       = {0,0,0,0};
@@ -446,7 +447,14 @@ void MC_PULL_detect_channels_inserted()
     for (uint8_t ch = 0; ch < kChCount; ch++)
     {
         const float a = s[ch] * invN;
-        filament_channel_inserted[ch] = (a > VMIN) && (a < VMAX);
+        const bool inserted_now = (a > VMIN) && (a < VMAX);
+
+        // v4.0-tpu: 料拔出 -> 下一次插入时按"空通道最软"吸料。
+        // 否则 filament_type 会残留上次设的型号(如 PLA), 换 TPU 新料时仍走刚性 -> TPU 送不进。
+        if (filament_channel_inserted[ch] && !inserted_now)
+            ams[motion_control_ams_num].filament[ch].filament_type = _filament_type::unknown;
+
+        filament_channel_inserted[ch] = inserted_now;
     }
 }
 
@@ -1078,24 +1086,33 @@ public:
         // 推力900)，TPU 软料被猛拽送不进。现统一在顶部算好，各分支复用。
         //
         // 三种情形的处理：
-        //   1) filament_type == tpu  (打印机已下发 GFU98 设好型号)
+        //   1) 通道已设型号(filament_type != unknown) 且本地保存型号为 TPU(GFU**)
         //        -> 用编译期写死表 TPU_FIXED_ID[CHx] 的真实型号参数。
+        //        注意：v4.0 改为"打印过程以本地保存型号(bambubus_filament_id)为准"，
+        //        而非运行时下发的 filament_type。打印机下发 set_filament 时会把真实
+        //        型号写入 bambubus_filament_id 并存 Flash，掉电不丢；上电即从 Flash
+        //        恢复，故即使打印机未实时下发，也能按上次设好的型号跑对应推力。
         //   2) filament_type == unknown 且通道已插入(空通道首次上料, 打印机还没设型号)
         //        -> 按"最软"参数(参数表末项 TPU_85A)把料先送进来，避免猛拽送不进；
-        //           等打印机下发 GFU98 设好型号后自动切到情形1的对应型号参数。
+        //           BMCU 不知道插的是啥，先用最软力把料送进来，实际型号待用户去
+        //           打印机设好/或本地已有保存，再切到情形1的对应型号参数。
         //   3) 其他(PLA/PETG/... 等非 TPU 已设材质) -> nullptr, 走原刚性常量(零差异)。
         const _tpu_param *tpu_p = nullptr;
         {
             auto &F = ams[motion_control_ams_num].filament[CHx];
-            if (F.filament_type == _filament_type::tpu)
+            if (F.filament_type != _filament_type::unknown &&
+                is_tpu_id(F.bambubus_filament_id))
             {
-                tpu_p = tpu_param_fixed((uint8_t)CHx);   // 已设型号 -> 写死表真实型号
+                tpu_p = tpu_param_fixed((uint8_t)CHx);   // 本地保存型号为 TPU -> 写死表真实型号
             }
             else if (F.filament_type == _filament_type::unknown &&
                      filament_channel_inserted[CHx])
             {
-                // 空通道首料：按最软(85A)把料送进来，设好型号后再按设定料送。
-                tpu_p = &TPU_PARAMS[TPU_PARAMS_N - 1];
+                // 空通道首料：BMCU 还不知道插的是啥料，用刚性常量(PWM 上限900/速度60/
+                // 连续转)把料可靠吸进来，不能套用 85A 最软项(180力+间歇门控)——力太小
+                // 连 PLA/PETG 都推不动、电机看似不转。装进来后若本地型号是 TPU，on_use/
+                // 打印过程会切到 TPU 软参数(间歇门控在那阶段保护软料)。
+                tpu_p = nullptr;
             }
         }
         tpu_p_run = tpu_p;   // 间歇门控统一出口用的运行期指针(全程有效)
@@ -1232,6 +1249,7 @@ public:
                                 else
                                 {
                                     dm_autoload_x = -dir * dm_push_pwm;
+                                    feeding_fwd = true;   // DM 首料上料往前推 -> 进入间歇送料截断(软料不能持续顶)
                                 }
                                 break;
 
@@ -1286,13 +1304,26 @@ public:
                                     dm_auto_remain_m[CHx] = r;
                                 }
 
-                                if (MC_PULL_pct_f[CHx] > DM_AUTO_BUF_ABORT_PCT)
+                                // v4.0-tpu: 软料(TPU)弹性大, 缓冲%易被 BMG 压着虚高, 单次突跳就 abort 会误判。
+                                // 放宽 abort 阈值(软料允许更高缓冲%), 且要求"持续超阈"才计数, 避免偶发虚高误杀。
+                                // 注意: 此处位于 switch/case 内, 不得声明跨 case 的局部 const(会触发 jump crosses initialization)。
+                                {
+                                    const float buf_abort_pct = tpu_p ? 92.0f : DM_AUTO_BUF_ABORT_PCT;
+                                    const bool  buf_over = (MC_PULL_pct_f[CHx] > buf_abort_pct);
+                                    if (buf_over)
+                                        dm_buf_over_cnt[CHx] += 1u;   // 持续超阈累计, 回落即清零
+                                    else
+                                        dm_buf_over_cnt[CHx] = 0u;
+                                }
+
+                                if (dm_buf_over_cnt[CHx] >= 40u)   // 约 40 个周期(数百 ms)持续超阈才判真堵
                                 {
                                     uint8_t t = dm_auto_try[CHx];
                                     if (t < 255u) t++;
                                     dm_auto_try[CHx] = t;
 
                                     dm_auto_last_m[CHx] = cur_m;
+                                    dm_buf_over_cnt[CHx] = 0u;
 
                                     if (t >= 3u)
                                     {
@@ -1321,6 +1352,7 @@ public:
                                 else
                                 {
                                     dm_autoload_x = -dir * dm_push_pwm;
+                                    feeding_fwd = true;   // DM S2 推进阶段往前推 -> 进入间歇送料截断
                                 }
                                 break;
 
@@ -1841,6 +1873,11 @@ public:
 
                 if (do_speed_pid)
                     x = dir * PID_speed.caculate(now_speed - speed_set, time_E);
+
+                // v4.0-tpu: Stage1 快送是正向往前送料, TPU 软料也需进入间歇门控(避免持续猛顶)。
+                // 仅 TPU 通道置位; 非 TPU 不截断(保持原刚性高速送料)。
+                if (tpu_p && do_speed_pid)
+                    feeding_fwd = true;
             }
         }
         else
@@ -2369,9 +2406,9 @@ static auto dm_ar_finish_pullback = [](uint8_t i, uint64_t t_now) -> void
                 g_pull_remain_m[i]  = 0.0f;
                 g_pull_speed_set[i] = -PULL_V_FAST;
                 MOTOR_CONTROL[i].set_motion(filament_motion_enum::filament_motion_stop, 100, time_now);
-                // v4.0-tpu: TPU 软料回弹，固定长度回抽额外多退 pull_comp_m（仅该通道识别为 TPU 时）
+                // v4.0-tpu: TPU 软料回弹，固定长度回抽额外多退 pull_comp_m（仅该通道本地保存型号为 TPU 时）
                 float pull_target = motion_control_pull_back_distance;
-                if (A.filament[i].filament_type == _filament_type::tpu)
+                if (is_tpu_id(A.filament[i].bambubus_filament_id))
                 {
                     const _tpu_param *tp = tpu_param_lookup(A.filament[i].bambubus_filament_id);
                     pull_target += tp->pull_comp_m;
@@ -2384,9 +2421,9 @@ static auto dm_ar_finish_pullback = [](uint8_t i, uint64_t t_now) -> void
                 g_pull_remain_m[i]  = 0.0f;
                 g_pull_speed_set[i] = -PULL_V_FAST;
                 MOTOR_CONTROL[i].set_motion(filament_motion_enum::filament_motion_stop, 100, time_now);
-                // v4.0-tpu: TPU 软料回弹，固定长度回抽额外多退 pull_comp_m（仅该通道识别为 TPU 时）
+                // v4.0-tpu: TPU 软料回弹，固定长度回抽额外多退 pull_comp_m（仅该通道本地保存型号为 TPU 时）
                 float pull_target = motion_control_pull_back_distance;
-                if (A.filament[i].filament_type == _filament_type::tpu)
+                if (is_tpu_id(A.filament[i].bambubus_filament_id))
                 {
                     const _tpu_param *tp = tpu_param_lookup(A.filament[i].bambubus_filament_id);
                     pull_target += tp->pull_comp_m;
@@ -2688,6 +2725,7 @@ static void motor_motion_run(int error, uint64_t time_now, uint32_t now_ticks)
             dm_fail_latch[ch]        = 0u;
             dm_auto_state[ch]        = DM_AUTO_IDLE;
             dm_auto_try[ch]          = 0u;
+            dm_buf_over_cnt[ch]      = 0u;
             dm_auto_t0_ms[ch]        = 0ull;
             dm_auto_remain_m[ch]     = 0.0f;
             dm_auto_last_m[ch]       = 0.0f;
@@ -2707,6 +2745,7 @@ static void motor_motion_run(int error, uint64_t time_now, uint32_t now_ticks)
             dm_fail_latch[ch]        = 0u;
             dm_auto_state[ch]        = DM_AUTO_IDLE;
             dm_auto_try[ch]          = 0u;
+            dm_buf_over_cnt[ch]      = 0u;
             dm_auto_t0_ms[ch]        = 0ull;
             dm_auto_remain_m[ch]     = 0.0f;
             dm_auto_last_m[ch]       = 0.0f;
@@ -2969,12 +3008,14 @@ static void motor_motion_run(int error, uint64_t time_now, uint32_t now_ticks)
 #endif
             {
                 // v4.0-tpu: FILAMENT_RGB 宏关闭时，用 RGB 验证"程序是否真的识别到 TPU"。
-                //  - 识别到 TPU（filament_type==tpu）：显示该型号专属纯色（一眼看出是哪种 TPU）
+                //  - 识别到 TPU（本地保存型号为 GFU**，is_tpu_id）：显示该型号专属纯色（一眼看出是哪种 TPU）
                 //  - 非 TPU（PLA/PETG/ABS/PA/未知/other）：统一显示一种颜色，便于和 TPU 区分
-                if (ams[motion_control_ams_num].filament[i].filament_type == _filament_type::tpu)
+                if (is_tpu_id(ams[motion_control_ams_num].filament[i].bambubus_filament_id))
                 {
                     uint8_t tr, tg, tb;
-                    tpu_model_rgb(ams[motion_control_ams_num].filament[i].tpu_model, tr, tg, tb);
+                    // v4.0-tpu: 显示"内部真实写死表型号"色, 而非下发 GFU98(打印机看到的),
+                    // 让用户肉眼知 BMCU 内部实际在跑的 TPU 型号(如写死 GFU90 -> 橙色)。
+                    tpu_model_rgb(tpu_param_fixed(i)->model, tr, tg, tb);
                     r = tr; g = tg; b = tb;
                 }
                 else
@@ -3341,6 +3382,7 @@ void Motion_control_init()
                 dm_fail_latch[ch]        = 0u;
                 dm_auto_state[ch]        = DM_AUTO_IDLE;
                 dm_auto_try[ch]          = 0u;
+                dm_buf_over_cnt[ch]      = 0u;
                 dm_auto_t0_ms[ch]        = 0ull;
                 dm_auto_remain_m[ch]     = 0.0f;
                 dm_auto_last_m[ch]       = 0.0f;
@@ -3357,6 +3399,7 @@ void Motion_control_init()
             dm_fail_latch[ch]        = 0u;
             dm_auto_state[ch]        = DM_AUTO_IDLE;
             dm_auto_try[ch]          = 0u;
+            dm_buf_over_cnt[ch]      = 0u;
             dm_auto_t0_ms[ch]        = 0ull;
             dm_auto_remain_m[ch]     = 0.0f;
             dm_auto_last_m[ch]       = 0.0f;

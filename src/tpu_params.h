@@ -150,6 +150,18 @@ static inline const _tpu_param *tpu_param_lookup(const char *filament_id)
     return &TPU_PARAMS[TPU_PARAMS_N - 1];        // 未知 TPU → 最软默认
 }
 
+// v4.0-tpu: 判断某个 bambubus_filament_id（本地保存/从 Flash 恢复的真实型号）
+// 是否为 TPU 软料。规则：第 3 字符为 'U'（GFU**）即 TPU，其余(GFA/GFG/GFB/GFL)为刚性料。
+// 用于"打印过程送料力判定"改以本地保存型号为准（而非运行时下发的 filament_type）。
+// 注意：tpu_param_lookup() 对未知前缀会回退最软项(TPU_85A, model!=UNKNOWN)，
+// 故不能仅凭 model!=UNKNOWN 判 TPU，必须用此前缀判定。
+static inline bool is_tpu_id(const char *id)
+{
+    if (id == nullptr || id[0] != 'G' || id[1] != 'F' || id[2] != 'U')
+        return false;
+    return true;
+}
+
 // ---- 编译期每通道写死型号表（TPU 4 通道方案）---------------------------
 // 来源：构建脚本传入 BMCU_TPU_FIX0..3（值形如 GFU98 / GFU90 / GFU95 / GFU85）。
 // 未定义某通道宏时保底写死最软最稳的 GFU85，保证任何配置都能跑（不依赖打印机下发）。

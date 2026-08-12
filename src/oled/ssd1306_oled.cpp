@@ -449,26 +449,19 @@ void SSD1306_OLED::draw_channels()
         line[n++] = (char)('0' + r);
         line[n++] = ':';
 
-        if (!f.online)
+        if (f.meters <= 0.05f)
         {
-            // 无通道 / 从未被打印机设置
-            line[n++] = 'E'; line[n++] = 'R'; line[n++] = 'R';
-            // 颜色列留空（已填空格），不显示 WHI 等残留色
-        }
-        else if (f.meters <= 0.05f)
-        {
-            // 在线但无料
+            // v4.0-tpu: empty channel shows NULL, not ERR
             line[n++] = 'N'; line[n++] = 'U'; line[n++] = 'L'; line[n++] = 'L';
-            const char* c = color_name(f.color_R, f.color_G, f.color_B);
-            line[8] = c[0]; line[9] = c[1]; line[10] = c[2];
         }
         else
         {
-            // 有料：显示型号（TPU 显写死型号，其它显材质名）
+            // 有料: 材质名 + 下发型号 (e.g. "PETG GFG00" / "TPU GFU90")
             const char* mat = material_label(r);
             for (int i = 0; mat[i] && n < 7; i++) line[n++] = mat[i];
-            const char* c = color_name(f.color_R, f.color_G, f.color_B);
-            line[8] = c[0]; line[9] = c[1]; line[10] = c[2];
+            if (n < 7) line[n++] = ' ';
+            const char* id = f.bambubus_filament_id;
+            for (int i = 0; i < 5 && id[i] && n < OLED_COLS; i++) line[n++] = id[i];
         }
 
         draw_line_if_changed(r, line);   // 直接占 4 行，CH3 也能显示
