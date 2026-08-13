@@ -54,6 +54,14 @@ uint64_t g_last_unk_ms   = 0u;          // 最近未知指令时间戳
 char     g_last_unk_raw[40] = {0};      // 最近未知指令原始片段
 uint32_t g_unk_cnt = 0u;                // 未知指令累计计数
 
+// 未知指令环形缓冲：保存最近 UNK_RING_N 条原始片段，抓包页第2行轮显，
+// 避免“只显示最后一条”而丢失多次出现的不同未知包（如 A / 3 3 / E06A48220 / S N）。
+#define UNK_RING_N 4u
+char     g_unk_ring[UNK_RING_N][40] = {0};  // 环形缓冲：每条未知包原始片段
+uint64_t g_unk_ring_ms[UNK_RING_N] = {0};   // 对应时间戳
+uint8_t  g_unk_ring_head = 0u;              // 下一个写入位置
+uint8_t  g_unk_ring_cnt  = 0u;              // 已缓存条数（≤ UNK_RING_N）
+
 void oled_log_rx(const char *label, const char *raw)
 {
     if (label) { strncpy(g_last_rx_label, label, sizeof(g_last_rx_label) - 1); g_last_rx_label[sizeof(g_last_rx_label) - 1] = '\0'; }
@@ -61,7 +69,7 @@ void oled_log_rx(const char *label, const char *raw)
     g_last_rx_ms = time_ms64();
     g_rx_cnt++;
 
-    // 未知指令（UNK）：不过滤，直接写入专用缓存 + 计数，供抓包页特别显示。
+    // 未知指令（UNK）：不过滤，直接写入专用缓存 + 计数 + 环形缓冲，供抓包页特别显示/轮显。
     if (label && strcmp(label, "UNK") == 0)
     {
         strncpy(g_last_unk_label, "UNK", sizeof(g_last_unk_label) - 1);
@@ -69,6 +77,13 @@ void oled_log_rx(const char *label, const char *raw)
         if (raw) { strncpy(g_last_unk_raw, raw, sizeof(g_last_unk_raw) - 1); g_last_unk_raw[sizeof(g_last_unk_raw) - 1] = '\0'; }
         g_last_unk_ms = g_last_rx_ms;
         g_unk_cnt++;
+        // 写入环形缓冲（最近 4 条），抓包页第2行轮显，避免“只看到最后一条”丢失多包。
+        uint8_t idx = g_unk_ring_head;
+        g_unk_ring[idx][0] = '\0';
+        if (raw) { strncpy(g_unk_ring[idx], raw, sizeof(g_unk_ring[0]) - 1); g_unk_ring[idx][sizeof(g_unk_ring[0]) - 1] = '\0'; }
+        g_unk_ring_ms[idx] = g_last_rx_ms;
+        g_unk_ring_head = (uint8_t)((idx + 1u) % UNK_RING_N);
+        if (g_unk_ring_cnt < UNK_RING_N) g_unk_ring_cnt++;
         return;   // 未知指令不进入动作缓存，单独处理
     }
 
@@ -87,7 +102,8 @@ void oled_log_rx(const char *label, const char *raw)
         else if (sf == 0x07 && mf == 0x7F)                 act = "on_use";   // on_use（供料中）
         else if (sf == 0x07 && mf == 0x00)                 act = "stop";     // stop_on_use
         else if (sf == 0x09 && mf == 0x3F)                 act = "b_pullb";  // before_pull_back
-        // 其余（纯维持态心跳，如已经 on_use 后每秒的 0x7F 维持帧、0x03/0x00 等）不记录
+        else if (sf == 0x03 && mf == 0x00)                 act = "feed";     // 进料 send_out（之前漏掉！导致进料时 R 行黑）
+        // 其余（纯维持态心跳）不记录
         if (act)
         {
             strncpy(g_last_act_rx_label, act, sizeof(g_last_act_rx_label) - 1);

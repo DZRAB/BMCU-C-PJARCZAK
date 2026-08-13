@@ -69,5 +69,11 @@ extern char     g_last_unk_label[8];
 extern uint64_t g_last_unk_ms;
 extern char     g_last_unk_raw[40];
 extern uint32_t g_unk_cnt;
+// 未知指令环形缓冲：最近 UNK_RING_N 条原始片段，抓包页第2行轮显。
+#define UNK_RING_N 4u
+extern char     g_unk_ring[UNK_RING_N][40];
+extern uint64_t g_unk_ring_ms[UNK_RING_N];
+extern uint8_t  g_unk_ring_head;
+extern uint8_t  g_unk_ring_cnt;
 extern void oled_log_rx(const char *label, const char *raw);
 extern void oled_log_tx(const char *label);

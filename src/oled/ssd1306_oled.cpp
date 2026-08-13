@@ -67,13 +67,33 @@ void SSD1306_OLED::draw_pkt_overlay(uint64_t now)
                    (g_last_tx_ms == 0u) ? 0u : (now - g_last_tx_ms));
     draw_line_if_changed(1, buf);
 
-    // L2: 最近“抓包片段”——未知指令优先（标 '?' 前缀特别显示），否则显示动作指令原始片段。
-    //     未知指令一般偶发，不会每秒刷；动作片段变化频繁。本行后续改由 framebuffer 差值刷新去闪。
+    // L2: 未知指令轮显（标 '?' 前缀）+ 无未知时显示动作指令原始片段（'>' 前缀）。
+    //     未知指令可能连续出现多条（如 A / 3 3 / E06A48220 / S N），用环形缓冲每 ~2.5s 轮切一条，
+    //     避免“只显示最后一条”而丢失之前的未知包。无未知时回退显示动作原始片段。
     uint8_t k = 0;
     const char* frag;
     char frag_prefix;
-    if (g_last_unk_label[0] != '\0') { frag = g_last_unk_raw; frag_prefix = '?'; }  // 未知指令：特别高亮
-    else                             { frag = rx_raw;        frag_prefix = '>'; }
+    static uint64_t s_unk_rotate_ms = 0u;   // 轮显计时
+    static uint8_t  s_unk_rotate_idx = 0u;  // 当前轮显的环形缓冲逻辑序号
+    if (g_unk_ring_cnt > 0u)
+    {
+        // 每 2500ms 推进一次轮显位置（在已缓存条数内循环）
+        if (s_unk_rotate_ms == 0u) s_unk_rotate_ms = now;
+        if (now - s_unk_rotate_ms >= 2500u)
+        {
+            s_unk_rotate_ms = now;
+            s_unk_rotate_idx = (uint8_t)((s_unk_rotate_idx + 1u) % g_unk_ring_cnt);
+        }
+        // 把逻辑序号映射到环形缓冲的物理位置（head 指向“下一个写入”，最老的是 head）
+        uint8_t phys = (uint8_t)((g_unk_ring_head + s_unk_rotate_idx) % UNK_RING_N);
+        frag = g_unk_ring[phys];
+        frag_prefix = '?';
+    }
+    else
+    {
+        frag = rx_raw;
+        frag_prefix = '>';
+    }
     buf[k++] = frag_prefix; buf[k++] = ' ';
     for (uint8_t i = 0; frag[i] && k < OLED_COLS; i++) buf[k++] = frag[i];
     while (k < OLED_COLS) buf[k++] = ' ';
