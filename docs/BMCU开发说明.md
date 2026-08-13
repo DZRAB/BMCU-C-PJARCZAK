@@ -1117,9 +1117,10 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
   - `draw_aht20(bool comm_ok, float temp, float humi, ...)`：画 AHT20 页（详见 15.4）。
   - `draw_channels()`：画四通道概览页（详见 15.4）。
   - `draw_comm(bool comm_ok)`：画通讯监控页（详见 15.4）。
+  - `draw_sniffer()`：画抓包页（`page_sniffer`，详见 15.4 第 3 页），显示 BMCU↔打印机的原始 RX/TX 通讯抓包，用于上机盯指令交互。
   - `draw_action(...)`：动作覆盖页（见 15.4 动作显示）。
-- **多页轮询**：`oled_page` 枚举（`page_aht20` / `page_channels` / `page_comm` / `page_count`），由 `tick()` 内部计时器每数秒翻一页（AHT20 页 → 四通道概览页 → 通讯监控页 循环切换），无需用户干预。
-  - **调试开关**：排查通讯问题时，可临时在 `tick()` 开头加 `if (true) { draw_comm(comm_ok); return; }` 强制只显通讯页（注意这是调试态，**发布前务必改回 `if (false)` 或删除**，否则 OLED 永远只显通讯页、其它页看不到）。
+- **多页轮询**：`oled_page` 枚举（`page_aht20` / `page_channels` / `page_comm` / `page_sniffer` / `page_count`），由 `tick()` 内部计时器每数秒翻一页（AHT20 页 → 四通道概览页 → 通讯监控页 → 抓包页 循环切换），无需用户干预。
+  - **调试开关**：排查通讯/抓包问题时，可临时在 `tick()` 开头加 `if (true) { draw_sniffer(); return; }` 强制只显抓包页（注意这是调试态，**发布前务必改回 `if (false)` 或删除**，否则 OLED 永远只显抓包页、其它页看不到）。
 
 ### 15.3 主循环集成（`src/main.cpp`）
 
@@ -1160,6 +1161,35 @@ OLED 与 RGB 灯是**同一套状态信息的两种呈现**：不上机 / 通讯
 - `PKG` 增长但 `SET` 不 +1 → 打印机没下发 `set_filament`（或 `ams_num` 不匹配被早退拦截），BMCU 收不到设料指令。
 - `SET` +1 但 `ID` 不是 `GFU98` → 打印机下发的不是 TPU for AMS 料号（下发的料号本身不带 TPU 标记），BMCU 不会走写死 TPU 分支。
 - `ID` 是 `GFU98` 且 `SET` +1，但 RGB 灯仍不对 → 写死表/显示链路问题（已非通讯层）。
+
+**第 3 页 · 抓包页（`page_sniffer`，v4.0-tpu 调试新增）**
+本页是 OLED 多页轮询里的**第 4 个显示页**（枚举 `page_sniffer = 3`，从 1 计数即第 4 页），用于在**上机时实时盯 BMCU 与打印机的原始通讯抓包**，排查「打印机到底发了什么指令」「TX 回了什么」这类问题。绘制函数 `draw_sniffer()` → `draw_pkt_overlay()`。
+
+该页共 4 行，靠 `draw_line_if_changed()` / `draw_line_soft()` 仅在内容变化时才重绘（去闪机制见下「去闪改造」）：
+
+**去闪改造（v4.0-tpu 调试期实测优化）**
+SSD1306 若每次刷新都整行 `clear_line()`（清整行再写）会导致肉眼可见黑闪，抓包页原始片段行每秒多次变化尤为明显。改造如下：
+- `draw_line_if_changed(row, text)`：维护 `s_line_buf[row]` 缓存，仅当字符串变化才重绘该行（逻辑未变，仍是每帧比对、变化才擦写）。
+- 新增 `draw_line_soft(row, text)`：**不调用 `clear_line`**，而是先整行写满 16 个空格（字模全 0，等价于清屏但不发清屏事务）再写真实内容。抓包页**行 2（RX 原始片段，变化最频繁）** 改用它，消除整行擦写黑闪。
+- 删除 `tick()` 中**重复的 `switch(s_page)` 块**（会把每页每帧画两遍，是刷新慢+闪屏的重要元凶）。
+- 移除动作结束 / `action_idle` 处的整屏 `clear()`：原本动作结束会 `clear()` 整屏再回轮询（黑闪一下），改为靠 `draw_line_if_changed` 逐行自然覆盖过渡，不再整屏黑闪。
+- 注：固定只显抓包页的调试开关 `if (true) { draw_sniffer(); return; }` 下，切页逻辑不执行，因此不涉及切页时的 `clear()` 闪屏；恢复正常轮询后切页同样已无整屏 `clear()`。
+
+| 行 | 内容 | 含义 |
+|---|---|---|
+| 行 0 | `RX <标签> <秒数>s` | 最近一次**收到**（打印机→BMCU）的指令。标签优先显示「重要指令」缓存 `g_last_imp_rx_label`（`SN`/`VER`/`RD`/`RFID`/`SET`/…），排除高频心跳 `ONL`/`MC`/`MOT`/`STU`；重要缓存空时回退到最近 RX 标签。`<秒数>` = 该指令距现在多少秒（>999 显示 999） |
+| 行 1 | `TX <标签> <秒数>s` | 最近一次 **BMCU 发出**（BMCU→打印机）的指令标签 + 秒数 |
+| 行 2 | `> <原始片段>` | 最近一次 RX 的**原始指令片段**（`g_last_rx_frag[]`，含指令正文前段），用于看具体指令内容；本行变化最频繁，用 `draw_line_soft()` 软覆盖消除黑闪 |
+| 行 3 | `P<收包> S<设料> r<RX总> t<TX总>` | 累计计数：`g_pkg_recv_cnt`（收包分发总数）/ `g_set_filament_cnt`（设料次数）/ `g_rx_cnt`（RX 总包）/ `g_tx_cnt`（TX 总包） |
+
+**为什么 `R` 后面常是 `SN`**：序列号（`SN`）是**打印机侧周期性轮询** BMCU 的查询指令（`serial_number`，`bambu_bus_ams.cpp` 收到后回传预填 SN），不是 BMCU 自己查的。它在多页轮询时尤其显眼，属**正常握手行为**；高频心跳（ONL/MOT/STU）被过滤不在此显示。
+
+**动作霸屏期间也显示抓包（含 SN）**：进料/退料/上料动作（`show_action`/`notify_action`）触发动作覆盖页时，覆盖页第 3 行（`draw_line_if_changed(3, rxln)`）会改为显示 `R <RX标签> <秒数>s`（即最近一条 RX 抓包，含 `SN`），而不再是空行——这样进料/退料霸屏时也能在底部看到打印机下发的真实指令，而非一片空白（用户实测诉求：进料霸屏时仍想看抓包）。
+
+**排查用法**（盯此页）：
+- `RX`/`TX` 标签长期不更新 → 打印机没跟 BMCU 通讯（接线/地址/波特率）。
+- `R` 后面一直是 `SN` → 正常（打印机在周期查 SN）；同时看 `r` 计数是否增长确认 RX 链路活着。
+- `P` 计数不增长 → 收包链路断（`g_pkg_recv_cnt` 只在成功解析一包时 +1）。
 
 **动作覆盖页（临时插队）**
 当某通道进入送料动作（进料 `send_out` / 退料 `pulling_back` / 准备上料 `before_on_use`）时，OLED 立即切到该通道动作页（显示 `CHx: 进料/退料/上料`），动作结束后自动回到常规页轮询。这与 RGB 通道灯的动作/故障状态色（绿/紫闪/黄）信息同源。

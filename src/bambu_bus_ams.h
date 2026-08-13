@@ -45,3 +45,23 @@ extern uint32_t g_pkg_recv_cnt;        // 成功解析的打印机包总数
 extern uint32_t g_set_filament_cnt;    // set_filament 被调用次数
 extern char     g_last_filament_id[8]; // 最近一次收到的 filament_id（如 "GFU98"）
 extern uint64_t g_last_pkg_ms;         // 最近一次成功收包的时间戳（ms）
+
+// ===== v4.0-tpu 抓包：最近一次 RX(打印机->BMCU) / TX(BMCU->打印机) 指令短标签 =====
+// OLED 抓包页(page_sniffer)只读；bambu_bus_ams.cpp 在各 RX 分发 / TX 发送点写入。
+// 标签为 3~4 字符缩写，例如 "MOT"(运动) "RFID"(设料) "VER"(版本) "RD"(读料) "SN"(序列号)
+// "ONL"(在线检测) "MC"(MC上线) "STU"(状态) "HB"(心跳) 等，便于调试记录。
+extern char     g_last_rx_label[8];    // 最近 RX 指令短标签
+extern uint64_t g_last_rx_ms;          // 最近 RX 时间戳(ms)
+extern char     g_last_tx_label[8];    // 最近 TX 指令短标签
+extern uint64_t g_last_tx_ms;          // 最近 TX 时间戳(ms)
+extern uint32_t g_rx_cnt;              // RX 指令累计数(不含心跳/在线等高频包可选)
+extern uint32_t g_tx_cnt;              // TX 指令累计数
+// 记录最近一次收到的原始指令片段(用于抓包页显示, 仅截前部, 不全文)
+extern char     g_last_rx_raw[40];
+// 最近"重要指令"独立缓存：心跳包频刷会覆盖 g_last_rx_label，重要指令(非 ONL/MC/MOT/STU)
+// 单独留存，抓包页/霸屏优先显示，稳定不被心跳覆盖。
+extern char     g_last_imp_rx_label[8];
+extern uint64_t g_last_imp_rx_ms;
+extern char     g_last_imp_rx_raw[40];
+extern void oled_log_rx(const char *label, const char *raw);
+extern void oled_log_tx(const char *label);

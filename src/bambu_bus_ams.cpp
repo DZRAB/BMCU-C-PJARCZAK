@@ -15,6 +15,7 @@
 // 由 BMCU_AUTO_REBOOT_ENABLE(bambu_bus_ams.h) 控制开关
 #if BMCU_AUTO_REBOOT_ENABLE
 extern volatile uint8_t g_local_pullback_seen;
+extern volatile bool    g_pd_armed;   // v4.0-tpu 修复问题3: 本机供料武装标志(main.cpp 定义)
 #endif
 
 uint8_t bambubus_ams_map[4] = {0, 1, 2, 3};
@@ -27,6 +28,44 @@ uint32_t g_pkg_recv_cnt   = 0u;   // 成功解析的打印机包总数（持续�
 uint32_t g_set_filament_cnt = 0u; // set_filament 被调用次数（打印机下发设料指令计数）
 char     g_last_filament_id[8] = {0}; // 最近一次收到的 filament_id（如 "GFU98"），未收到则为空
 uint64_t g_last_pkg_ms   = 0u;   // 最近一次成功收包的时间戳（ms）
+
+// ===== v4.0-tpu 抓包：最近 RX/TX 指令短标签 + 原始片段（供 OLED 抓包页/霸屏显示）=====
+char     g_last_rx_label[8] = {0};  // 最近 RX 指令短标签（如 "MOT"/"RFID"/"VER"）
+uint64_t g_last_rx_ms   = 0u;   // 最近 RX 时间戳(ms)
+char     g_last_tx_label[8] = {0};  // 最近 TX 指令短标签
+uint64_t g_last_tx_ms   = 0u;   // 最近 TX 时间戳(ms)
+uint32_t g_rx_cnt = 0u;         // RX 指令累计数（心跳/在线检测等高频率包也计）
+uint32_t g_tx_cnt = 0u;         // TX 指令累计数
+char     g_last_rx_raw[40] = {0}; // 最近一次 RX 原始指令前段（抓包页显示用，不全文）
+
+// 最近“重要指令”独立缓存：心跳包(ONL/MC/MOT/STU)频刷会覆盖 g_last_rx_label，
+// 导致抓包页/霸屏来不及看就跳成心跳。重要指令(非心跳)单独留存，稳定显示不被刷掉。
+char     g_last_imp_rx_label[8] = {0};  // 最近重要 RX 标签（RFID/VER/RD/SN/MC确认等）
+uint64_t g_last_imp_rx_ms   = 0u;       // 最近重要 RX 时间戳
+char     g_last_imp_rx_raw[40] = {0};   // 最近重要 RX 原始片段
+
+void oled_log_rx(const char *label, const char *raw)
+{
+    if (label) { strncpy(g_last_rx_label, label, sizeof(g_last_rx_label) - 1); g_last_rx_label[sizeof(g_last_rx_label) - 1] = '\0'; }
+    if (raw)   { strncpy(g_last_rx_raw,   raw,   sizeof(g_last_rx_raw)   - 1); g_last_rx_raw[sizeof(g_last_rx_raw) - 1] = '\0'; }
+    g_last_rx_ms = time_ms64();
+    g_rx_cnt++;
+    // 心跳包(ONL/MC/MOT/STU)频刷，不覆盖"重要指令"缓存；其余(如 RFID/VER/RD/SN)留存。
+    if (label && !(strcmp(label, "ONL") == 0 || strcmp(label, "MC") == 0
+                || strcmp(label, "MOT") == 0 || strcmp(label, "STU") == 0))
+    {
+        strncpy(g_last_imp_rx_label, label, sizeof(g_last_imp_rx_label) - 1);
+        g_last_imp_rx_label[sizeof(g_last_imp_rx_label) - 1] = '\0';
+        if (raw) { strncpy(g_last_imp_rx_raw, raw, sizeof(g_last_imp_rx_raw) - 1); g_last_imp_rx_raw[sizeof(g_last_imp_rx_raw) - 1] = '\0'; }
+        g_last_imp_rx_ms = g_last_rx_ms;
+    }
+}
+void oled_log_tx(const char *label)
+{
+    if (label) { strncpy(g_last_tx_label, label, sizeof(g_last_tx_label) - 1); g_last_tx_label[sizeof(g_last_tx_label) - 1] = '\0'; }
+    g_last_tx_ms = time_ms64();
+    g_tx_cnt++;
+}
 
 // v4.0-tpu: 由 Bambu filament_id（tray_info_idx）前缀判定材质类型。
 // 编码规则（Bambu Studio DeviceManager.cpp 证实，与打印机固件表一致）：
@@ -339,6 +378,10 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
             {
                 ams_ptr->pressure = 0x1E34;
             }
+#ifdef BMCU_OLED
+            // 打印机明确停止供料(stop_on_use)：立即结束 OLED 霸屏(退出 FEEDING/LOADING)
+            SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_idle);
+#endif
         }
         else if (is_on_use)
         {
@@ -377,6 +420,10 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
 
             ams_ptr->filament[ch].motion = _filament_motion::on_use;
             ams_ptr->filament_use_flag = 0x04;
+#if BMCU_AUTO_REBOOT_ENABLE
+            g_local_pullback_seen = 1u;   // v4.0-tpu 方案A: 本机进入过供料(打印/进料)也标记
+            g_pd_armed = true;            // v4.0-tpu 修复问题3: 武装重启(本机干过活, 空闲30s可重启)
+#endif
 #ifdef BMCU_OLED
             SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_feed);   // 送料覆盖显示
 #endif
@@ -707,6 +754,7 @@ void get_package_motion(bambubus_printer_motion_package_struct *package_recv)
 
     package_add_crc(out, sizeof(bambubus_ams_motion_package_struct));
     bus_port_to_host.send_data_len = sizeof(bambubus_ams_motion_package_struct);
+    oled_log_tx("MOT");   // 抓包: 本机向打印机回复运动/状态包
 }
 
 // 3D C5 0D F1 04 00 01 00 03 FF 00 B2 C4
@@ -876,6 +924,7 @@ void get_package_stu_motion(bambubus_printer_stu_motion_package_struct *package_
     package_num = (package_num < 7u) ? (uint8_t)(package_num + 1u) : 0u;
 
     bus_port_to_host.send_data_len = sizeof(bambubus_ams_stu_motion_package_struct);
+    oled_log_tx("STU");   // 抓包: 本机向打印机回复状态/温湿度包
 }
 
 uint8_t online_detect_res[29] = {
@@ -934,6 +983,7 @@ void get_package_online_detect(unsigned char *buf, int length)
         uint8_t *out = bus_port_to_host.tx_build_buf();
         memcpy(out, online_detect_res, 29);
         bus_port_to_host.send_data_len = 29;
+        oled_log_tx("ONL");   // 抓包: 本机回复在线检测
         return;
     }
 
@@ -952,6 +1002,7 @@ void get_package_online_detect(unsigned char *buf, int length)
     uint8_t *out = bus_port_to_host.tx_build_buf();
     memcpy(out, online_detect_res, 29);
     bus_port_to_host.send_data_len = 29;
+    oled_log_tx("ONL");   // 抓包: 本机回复在线注册成功
 }
 
 void get_package_long_packge_MC_online(unsigned char *buf, int length)
@@ -976,6 +1027,7 @@ void get_package_long_packge_MC_online(unsigned char *buf, int length)
     data.target_address = printer_data_long.source_address;
 
     bambubus_long_package_get(&data);
+    oled_log_tx("MC");   // 抓包: 本机回复 MC 上线确认
 }
 unsigned char long_packge_filament[] =
     {
@@ -1023,6 +1075,7 @@ void get_package_long_packge_filament(unsigned char *buf, int length)
     data.target_address = printer_data_long.source_address;
 
     bambubus_long_package_get(&data);
+    oled_log_tx("RD");   // 抓包: 本机回复读料信息(料盘元数据)
 }
 
 unsigned char long_packge_version_serial_number[] = {15,
@@ -1130,6 +1183,7 @@ void get_package_long_packge_serial_number(unsigned char *buf, int length)
     data.source_address = printer_data_long.target_address;
     data.target_address = printer_data_long.source_address;
     bambubus_long_package_get(&data);
+    oled_log_tx("SN");   // 抓包: 本机回复序列号
 }
 
 //0x0A // 10
@@ -1141,8 +1195,8 @@ void get_package_long_packge_serial_number(unsigned char *buf, int length)
 //0x46 // 70
 //0x50 // 80
 //0x5A // 90
-unsigned char long_packge_version_version_and_name_N3F05[] = {0x00, 0x00, 0x32, 0x0A , // verison number
-                                                             0x4E, 0x33, 0x46, 0x30, 0x35, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+unsigned char long_packge_version_version_and_name_AMS08[] = {0x00, 0x00, 0x32, 0x0A , // verison number
+                                                             0x41, 0x4D, 0x53, 0x30, 0x38, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 //unsigned char long_packge_version_version_and_name_AMS2PRO[] = {
 //    0x00, 0x00, 0x00, 0x5A,
 //    0x4E, 0x33, 0x46, 0x30, 0x35, 0x00, 0x00, 0x00,
@@ -1161,17 +1215,18 @@ void get_package_long_packge_version(unsigned char *buf, int length)
     if (ams_num != fixed_ams_num || ams[bambubus_ams_map[fixed_ams_num]].online != true)
         return;
 
-    long_packge_version_version_and_name_N3F05[sizeof(long_packge_version_version_and_name_N3F05) - 1u] = fixed_ams_num;
+    long_packge_version_version_and_name_AMS08[sizeof(long_packge_version_version_and_name_AMS08) - 1u] = fixed_ams_num;
 
     bambubus_long_packge_data data;
-    data.datas = long_packge_version_version_and_name_N3F05;
-    data.data_length = (uint16_t)sizeof(long_packge_version_version_and_name_N3F05);
+    data.datas = long_packge_version_version_and_name_AMS08;
+    data.data_length = (uint16_t)sizeof(long_packge_version_version_and_name_AMS08);
     data.package_number = printer_data_long.package_number;
     data.type = printer_data_long.type;
     data.source_address = printer_data_long.target_address;
     data.target_address = printer_data_long.source_address;
 
     bambubus_long_package_get(&data);
+    oled_log_tx("VER");   // 抓包: 本机回复版本号
 }
 
 unsigned char set_filament_res[] = {0x3D, 0xC0, 0x08, 0xB2, 0x08, 0x60, 0xB4, 0x04};
@@ -1213,6 +1268,7 @@ void get_package_set_filament(unsigned char *buf, int length)
     ams_ptr->filament[read_num].name[19] = 0;
     memcpy(out, set_filament_res, sizeof(set_filament_res));
     bus_port_to_host.send_data_len = sizeof(set_filament_res);
+    oled_log_tx("RFID");   // 抓包: 本机回复设料(短包)
 }
 unsigned char set_filament_res_type2[] = {0x00, 0x00, 0x00};
 void get_package_set_filament_type2(unsigned char *buf, int length)
@@ -1271,6 +1327,7 @@ void get_package_set_filament_type2(unsigned char *buf, int length)
     data.target_address = printer_data_long.source_address;
 
     bambubus_long_package_get(&data);
+    oled_log_tx("RFID2");   // 抓包: 本机回复设料(type2)
 }
 
 bambubus_package_type bambubus_run()
@@ -1307,30 +1364,37 @@ bambubus_package_type bambubus_run()
             switch (stu)
             {
             case bambubus_package_type::filament_motion_short:
+                oled_log_rx("MOT", (const char *)buf);
                 get_package_motion((bambubus_printer_motion_package_struct *)buf);
                 break;
 
             case bambubus_package_type::filament_motion_long:
+                oled_log_rx("STU", (const char *)buf);
                 get_package_stu_motion((bambubus_printer_stu_motion_package_struct *)buf);
                 break;
 
             case bambubus_package_type::online_detect:
+                oled_log_rx("ONL", (const char *)buf);
                 get_package_online_detect(buf, len);
                 break;
 
             case bambubus_package_type::MC_online:
+                oled_log_rx("MC", (const char *)buf);
                 get_package_long_packge_MC_online(buf, len);
                 break;
 
             case bambubus_package_type::read_filament_info:
+                oled_log_rx("RD", (const char *)buf);
                 get_package_long_packge_filament(buf, len);
                 break;
 
             case bambubus_package_type::version:
+                oled_log_rx("VER", (const char *)buf);
                 get_package_long_packge_version(buf, len);
                 break;
 
             case bambubus_package_type::serial_number:
+                oled_log_rx("SN", (const char *)buf);
                 get_package_long_packge_serial_number(buf, len);
                 break;
 
@@ -1340,6 +1404,7 @@ bambubus_package_type bambubus_run()
                 const uint8_t ams_num = (b >> 4) & 0x0F;
                 const uint8_t fil = (b >> 0) & 0x0F;
 
+                oled_log_rx("RFID", (const char *)buf);
                 get_package_set_filament(buf, len);
 
                 if (ams_num == (uint8_t)BAMBU_BUS_AMS_NUM && fil < 4)
@@ -1348,6 +1413,7 @@ bambubus_package_type bambubus_run()
             }
 
             case bambubus_package_type::set_filament_info_type2:
+                oled_log_rx("RFID2", (const char *)buf);
                 get_package_set_filament_type2(buf, len);
                 if (printer_data_long.datas[0] == (uint8_t)BAMBU_BUS_AMS_NUM && printer_data_long.datas[1] < 4)
                     ams_datas_set_need_to_save_filament(printer_data_long.datas[1]);

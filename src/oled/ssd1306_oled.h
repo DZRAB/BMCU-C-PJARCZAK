@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "ams.h"           // _filament_motion / _filament_type / ams[]（OLED 内容层只读通道数据）
 #include "tpu_params.h"    // TPU_FIXED_ID[4] v4.0-tpu 写死型号表
+#include "bambu_bus_ams.h" // v4.0-tpu 抓包：g_last_rx_label / g_last_tx_label 等全局（只读）
 
 /*
  * SSD1306 OLED 驱动（I2C，0.96" 128x64，与 AHT20 共用同一条软件 I2C 总线）
@@ -111,6 +112,7 @@ public:
         page_aht20 = 0,   // 温湿度（含写死 TPU 摘要）
         page_channels,    // 四通道概览（材质/颜色/有无料/运动态）
         page_comm,        // 通讯监控（BMCU<->打印机 收包/设料统计）
+        page_sniffer,     // v4.0-tpu 抓包页（RX/TX 指令记录）
         page_count
     };
 
@@ -140,6 +142,13 @@ public:
 
     // 通讯监控页：显示 BMCU<->打印机 通讯统计（COMM 状态/总收包/设料次数/最近料号）。
     static void draw_comm(bool comm_ok);
+    // v4.0-tpu 抓包共用绘制（draw_sniffer 与指令霸屏共用），4 行 = RX/TX 标签+秒 / 原始片段 / 计数
+    static void draw_pkt_overlay(uint64_t now);
+
+    // v4.0-tpu 抓包页：显示最近一次 RX(打印机->BMCU)/TX(BMCU->打印机) 指令短标签与时间戳，
+    // 以及收包/设料累计计数，便于调试记录打印机与 BMCU 的通讯内容。
+    static void draw_sniffer();
+
 
     // 把 RGB 转成 3 字母颜色简写（RED/GRE/YEL/BLU/CYA/MAG/PUR/ORA/WHI/BLA）。
     static const char* color_name(uint8_t r, uint8_t g, uint8_t b);
@@ -156,11 +165,17 @@ private:
     static inline uint64_t  s_page_next_ms = 0;        // 下次切页时间
     static constexpr  uint64_t OLED_PAGE_DWELL_MS = 5000u;   // 每页停留（放慢，便于看清）
     static constexpr  uint64_t OLED_ACTION_HOLD_MS = 2500u;  // 动作覆盖持续
+    static constexpr  uint64_t OLED_PKT_HOLD_MS = 3000u;     // v4.0-tpu 指令霸屏持续（3秒自动回轮询）
 
     // 动作覆盖状态
     static inline oled_action s_action = oled_action::action_none;
     static inline uint8_t     s_action_ch = 0xFFu;
     static inline uint64_t    s_action_until_ms = 0;   // 覆盖结束时间
+
+    // v4.0-tpu 指令霸屏（抓包）：最近一次"有意义"的 RX 指令在 OLED_PKT_HOLD_MS 内时，
+    // 覆盖显示该 RX 指令内容（RX/TX 标签 + 原始片段），超时自动回轮询；高频包(ONL/HB)不霸屏。
+    static inline uint64_t    s_pkt_until_ms = 0;      // 指令霸屏结束时间
+
 
     // 把运动态枚举转成屏上短标签（≤4字符）
     static const char* motion_label(_filament_motion m);
@@ -170,6 +185,10 @@ private:
 
     // 仅在内容变化时才清行并重写，避免每帧整行擦写导致的闪烁。
     static void draw_line_if_changed(uint8_t row, const char* text);
+
+    // 软覆盖：先把整行用空格写满（不调 clear_line 清屏，无黑闪），再写新内容。
+    // 用于抓包页中变化极频繁的行（如 RX 原始片段），消除 clear_line 整行黑闪。
+    static void draw_line_soft(uint8_t row, const char* text);
 
     // 写命令 / 写数据（经 AHT20 总线底层）
     static void write_cmd(uint8_t c);

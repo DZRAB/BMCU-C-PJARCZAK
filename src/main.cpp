@@ -73,6 +73,12 @@ enum class print_done_state : uint8_t
 };
 static print_done_state   g_pd_state = print_done_state::idle;
 static uint64_t           g_pd_t0_ms = 0u;   // 进入 waiting_idle / fake_offline 的时间戳
+// v4.0-tpu 修复问题3: "本机干过活"武装标志。只要本机曾进入过供料(on_use)即置位,
+// 之后本机+总线全 idle 持续 30s 才会触发重启。避免空载 BMCU(从未供料)频繁重启。
+// 原逻辑只靠 g_local_pullback_seen(退料才置位), 而"打印完成"打印机不发退料指令,
+// 故正常打印完永远不触发 —— 这就是问题3 没实现的根因。
+// 由 bambu_bus_ams.cpp 的 set_motion(is_on_use) 置位(见 extern 声明)。
+volatile bool             g_pd_armed = false;
 #endif // BMCU_AUTO_REBOOT_ENABLE
 
 static inline void ram_to_flashinfo(uint8_t fil, Flash_FilamentInfo* o)
@@ -541,9 +547,10 @@ int main(void)
             switch (g_pd_state)
             {
             case print_done_state::idle:
-                if (g_local_pullback_seen != 0u)
+                // 修复问题3: 触发条件从"必须发生过退料(g_local_pullback_seen)"改为"本机曾供料(g_pd_armed)"。
+                // 打印完成/进料完成打印机不会发退料指令, 但会经过 on_use, 故 armed 即覆盖该场景。
+                if (g_pd_armed)
                 {
-                    g_local_pullback_seen = 0u;       // 消费掉触发标志
                     g_pd_state = print_done_state::waiting_idle;
                     g_pd_t0_ms = now_ms;
                 }
