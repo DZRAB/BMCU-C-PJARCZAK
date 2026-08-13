@@ -1244,11 +1244,64 @@ AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_
 
 4. **自动重启（打印完成软复位）总开关** — `src/bambu_bus_ams.h` 顶部
    ```c
-   #define BMCU_AUTO_REBOOT_ENABLE 0   // ← 改 1 开启自动重启；当前 TPU 测试期临时关
+   #define BMCU_AUTO_REBOOT_ENABLE 1   // ← 改 0 关闭自动重启；当前默认开（正式版保持开启）
    ```
    `1`=开启后，本机退料 + 本机及总线所有 AMS 全 idle 持续 30s → 假离线 10s → 软复位（见 14.13）；`0`=关闭，TPU 测试阶段不自动重启、方便反复上料调试。该宏定义在共享头文件，`main.cpp` 与 `bambu_bus_ams.cpp` 共用，改一处即全工程生效，**不动编译脚本**。
 
-### 16.4 编译宏一览（均由脚本注入，勿手改）
+5. **TPU 送料逻辑总开关** — `src/bambu_bus_ams.h` 顶部（与 `BMCU_AUTO_REBOOT_ENABLE` 相邻）
+   ```c
+   #define BMCU_TPU_ENABLE 1   // ← 改 0 全局熔断 TPU 送料；当前默认开
+   ```
+   `0`=**全局熔断 TPU 送料**：`Motion_control.cpp` run() 顶部 `tpu_p` 强制恒为 `nullptr`，所有通道（含设了 TPU 的）一律走 v3.2.1-fix105 原刚性常量；RGB 识别色也不走 TPU 专属色。`1`=**开启 TPU 送料逻辑（精准按通道隔离，当前默认）**：仅"被打印机设为 TPU（`filament_type==tpu`）的通道"走 TPU 写死表分支；设 PETG/PLA 的通道 `filament_type` 非 tpu → 走 v3.2.1-fix105 原逻辑（零差异）；设 TPU 再改回 PETG → `filament_type` 变 `petg` → 完全恢复 v3.2.1 行为。TPU 判定只看运行期 `filament_type`（由 `set_filament` 实时写入），**不再依赖 `bambubus_filament_id`（Flash 残留源）**，故绝无残留污染、可随时切回。另：此宏开启后，**RGB_OFF 模式下**设 TPU 的通道会显示"内部真实写死表型号"专属色（预期功能）。当前阶段默认 `1`（出稳定版策略：不设 TPU 即全走 v3.2.1，行为稳定；若要出纯刚性固件验证隔离，临时改 `0` 即可）。
+
+### 16.4 当前推荐用法（出稳定版）与已知问题
+
+#### 16.4.1 当前分支定位：v3.2.1-fix105 + OLED
+
+`dev/v4.0-tpu` 在 `v3.2.1-fix105`（AHT20 修复稳定版）之上叠加了三块内容：
+
+1. **OLED 状态屏**（`BMCU_OLED`，默认开）—— 与材质无关，PLA/PETG/TPU 都受益，属稳定功能。
+2. **自动重启（打印完成软复位）** —— 当前 `BMCU_AUTO_REBOOT_ENABLE=1` **默认开启**，出稳定版保持开启即可（见 16.3 第 4 处）。
+3. **TPU 送料逻辑** —— 见第 14 章，**仅在打印机将该通道设为 TPU（`filament_type==tpu`/下发 `GFU98`）时生效**；设 PLA/PETG/ABS 等非 TPU 时 `tpu_p==nullptr`，所有送料分支走 `tpu_p ? TPU参数 : v3.2原常量`，**与 v3.2.1-fix105 零差异**。
+
+> **结论**：当前固件当「v3.2.1-fix105 + OLED」给别人用时，**只要对方不设 TPU 型号，跑的就是 v3.2.1 原路径**（TPU 代码静态编入但运行期不触发）。可直接出稳定版，无需回退代码。
+
+#### 16.4.3 为稳定版做的两处修正（相对 v4.0-tpu 开发中途状态）
+
+1. **恢复空通道自吸为刚性 900（与 v3.2.1-fix105 一致）**
+   - 问题：v4.0-tpu 中途引入 `DM_AUTO_PWM_PUSH_EMPTY=750` / `DM_AUTO_PWM_PULL_EMPTY=600`，在 DM 自吸分支加 `empty_channel` 判定，把空通道首料力从 900 砍到 750。导致**设完 TPU 后空通道自吸被干扰/吸不动**（用户实测）。
+   - 修正：`Motion_control.cpp` 删除 `DM_AUTO_PWM_PUSH_EMPTY` / `DM_AUTO_PWM_PULL_EMPTY` 变量与 `empty_channel` 分支，自吸（空/非空通道）一律 `dm_push_pwm = tpu_p ? tpu_p->feed_pwm_lo : DM_AUTO_PWM_PUSH`（刚性 900）。设非 TPU 时 `tpu_p==nullptr` → 走 900，与 v3.2.1-fix105 完全等价。
+
+2. **电机 PWM 载波 18kHz → 36kHz（抑噪）**
+   - 见 16.4.2 #1。仅改 `MC_PWM_init()` 的 `TIM_Prescaler=1→0`，`TIM_Period`/满幅映射未动，不破坏 TPU 推力语义。
+
+3. **TPU 送料逻辑精准按通道隔离（设计原则）**
+   - **用户要求**：设 TPU 的通道才走 TPU 分支；设 PETG/PLA 的通道必须保持 v3.2.1-fix105 原逻辑；设 TPU 后改回 PETG 必须能完全恢复；绝不相互污染。
+   - **根因（历史 bug）**：原 v4.0-tpu 中途版 run() 顶部用 `is_tpu_id(bambubus_filament_id)` 判 TPU，而 `bambubus_filament_id` 是 Flash 持久化字段（"以本地保存型号为准"设计）。若打印机切 PETG 时漏发 `set_filament`，或 BMCU 上电从 Flash 恢复残留 `GFU98`，该通道会**持续按 TPU 参数跑**（自吸软力、on_use 降级）——即用户实测的"设完 TPU 再切 PETG 自吸不行"。
+   - **修复（当前实现）**：TPU 判定改为**只看运行期 `filament_type`**（`set_filament` 实时写入，拔料清 `unknown`）。`run()` 顶部 `if (F.filament_type == _filament_type::tpu) tpu_p = tpu_param_fixed(CHx); else tpu_p = nullptr;`。效果：
+     - 设 TPU → `filament_type=tpu` → 该通道走 TPU 写死表；
+     - 设 PETG/PLA → `filament_type=petg/pla` → `tpu_p=nullptr` → **走 v3.2.1 原刚性常量，与基线零差异**；
+     - 设 TPU 再改回 PETG → `set_filament` 写 `filament_type=petg` → 立即恢复 v3.2.1 行为；
+     - 拔料 → `filament_type` 清 `unknown` 且 `bambubus_filament_id` 数组清零（防御性）→ 彻底无残留。
+   - **额外保险**：`BMCU_TPU_ENABLE` 宏（默认 1，见 16.3 第 5 处）包住整个 TPU 判定。当前阶段默认 `1`（开启 TPU 送料逻辑）；要出纯刚性固件验证隔离或暂不用 TPU，临时改 `0` 即全局熔断，绝不走 TPU。
+   - 判定改为 `filament_type` 后，`bambubus_filament_id` 不再参与任何送料/RGB 运行期判定（仅作显示字段），故 Flash 残留型号不再污染逻辑。
+
+**注意**：v4.0-tpu 有 3 处「全材质生效」的改进也被带入（对非 TPU 也是正向的，不是回归）：
+- on_use 低缓冲判定由「零延迟瞬时锁死」改为「持续 8 秒累计」（14.13.4，修复空通道/自吸后进料无反应）。
+- 空通道首料自吸力统一为 `DM_AUTO_PWM_PUSH_EMPTY`（不随设置料变化，修复「设 TPU 不自吸」）。
+- 换料时清 `filament_type`，避免残留旧型号导致软料被误判刚性。
+
+#### 16.4.2 已知问题 / 待修复 bug
+
+| # | 问题 | 影响范围 | 根因（代码定位） | 状态 |
+|---|------|---------|----------------|------|
+| 1 | **电机 PWM 啸叫/噪音大** | 全材质（v3.2.1-fix105 基线就存在，非 v4.0 引入） | `Motion_control.cpp` `MC_PWM_init()`：`TIM_Period=999, TIM_Prescaler=1` → 载波 ≈`PCLK1/2000`。本工程 `SystemCoreClock=72MHz`、`APB1=36MHz` → **实际 ≈18kHz**，处于人耳听感上限边缘，电机线圈机械共振辐射可闻谐波；且负载变化时占空比抖动产生 18kHz 附近拍频。另：`PWM==0` 刹车态 `set1=set2=1000`（满占空比双臂同开）仍持续 18kHz 方波。 | **已修复（提载波至 36kHz）**：`MC_PWM_init()` 改 `TIM_Prescaler=1→0` → `36MHz/1000=36kHz`，超出人耳上限且远离机械共振峰；`TIM_Period` 保持 999、`Motion_control_set_PWM` 的 0~1000 满幅映射未动。若仍有轻微噪声，可进一步提频或改刹车态为双路 0 占空比。 |
+| 2 | **N3F05 型号可能被打印机拉黑** | 上报型号为 N3F05 时 | `bambu_bus_ams.cpp` `0x103` 包型号名由 `AMS08` 改 `N3F05`（v4.0 重新启用，为让 Studio 显示温湿度数值）。v3.2 曾实测运行两次即被拉黑而回退 AMS08；v4.0 测试环境未复现，但**未充分长测**。 | **风险项**。若对方反馈「用一阵被拉黑/掉线」，把 `bambu_bus_ams.cpp` 字节改回 `0x41,0x4D,0x53,0x30,0x38`（AMS08）重编即可，OLED 温湿度页仍可显示（屏显不依赖上报名）。 |
+| 3 | TPU 软料送料未调好 | 仅设 TPU 的通道 | 见第 14 章，间歇门控/写死表推力仍待实测迭代 | 本期不解决，出稳定版时务必**提醒对方不要设 TPU 型号** |
+
+> 注：bug #1 的 18kHz 是相对 `SystemCoreClock=72MHz` 推算；若对方板子实际跑 8MHz（HSI 默认无 PLL），则载波仅 **4kHz**，啸叫更明显。出稳定版前建议先确认目标板时钟配置。
+
+### 16.5 编译宏一览（均由脚本注入，勿手改）
 
 | 宏 | 来源 | 作用 |
 |---|---|---|

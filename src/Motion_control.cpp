@@ -232,17 +232,8 @@ static constexpr float    DM_AUTO_BUF_RECOVER_PCT      = 50.2f;    // retract-to
 static constexpr uint64_t DM_AUTO_FAIL_EXTRA_MS        = 1500ull;  // extra retract after fail
 static constexpr float    DM_AUTO_PWM_PUSH             = 900.0f;   // push strength (刚性)
 static constexpr float    DM_AUTO_PWM_PULL             = 900.0f;   // retract strength (刚性)
-// 空通道首次自吸统一最软力：用户要求空通道第一次装料自吸力四通道一致、不随设置料变化。
-// 不设成刚性900(避免硬拽软料), 也不按写死表分通道(避免设TPU后吸不动); 取能稳定自吸的软力。
-// 初校值: 实测刚性900能吸、初版写死表180~300吸不动, 取折中保底能吸。机台实测可再调。
-// v4.0-tpu: 空通道首料自吸 PWM(四通道统一,不随设置料变化——用户硬要求)。
-// 这是"自吸调速旋钮":自吸是往空管里第一次把料吸进来,料还没进缓冲头高压区,
-// 持续推比间歇更合理也更有效(见下方间歇门控对自吸的排除),故此处即有效推力。
-// 初校 750(原 600 偏软且被间歇砍占空比导致"自吸很慢");机台实测可整体上下调。
-// 注意:此值仅作用于空通道首料;设好 TPU 后的正式送料走 tpu_params 参数表的
-// feed_pwm_lo(700~850),与此值无关,两者互不干扰。
-static constexpr float    DM_AUTO_PWM_PUSH_EMPTY       = 750.0f;   // 空通道统一自吸力(调速旋钮)
-static constexpr float    DM_AUTO_PWM_PULL_EMPTY       = 600.0f;   // 空通道统一最软回抽力
+// 注: v4.0-tpu 曾新增 DM_AUTO_PWM_PUSH_EMPTY/PULL_EMPTY(空通道首料用软力750/600),
+// 导致"设完 TPU 后自吸被干扰"。已回退为与 v3.2.1-fix105 一致: 自吸一律刚性 900。
 static constexpr float    DM_AUTO_IDLE_LIM             = 950.0f;   // clamp only during autoload
 
 enum : uint8_t
@@ -464,7 +455,12 @@ void MC_PULL_detect_channels_inserted()
         // v4.0-tpu: 料拔出 -> 下一次插入时按"空通道最软"吸料。
         // 否则 filament_type 会残留上次设的型号(如 PLA), 换 TPU 新料时仍走刚性 -> TPU 送不进。
         if (filament_channel_inserted[ch] && !inserted_now)
+        {
             ams[motion_control_ams_num].filament[ch].filament_type = _filament_type::unknown;
+            // 同时清空本地保存型号(防御性): 拔料即彻底忘记上次型号, 避免任何残留触发 TPU 分支。
+            for (uint8_t k = 0u; k < sizeof(ams[motion_control_ams_num].filament[ch].bambubus_filament_id); k++)
+                ams[motion_control_ams_num].filament[ch].bambubus_filament_id[k] = 0;
+        }
 
         filament_channel_inserted[ch] = inserted_now;
     }
@@ -1112,23 +1108,21 @@ public:
         //           打印机设好/或本地已有保存，再切到情形1的对应型号参数。
         //   3) 其他(PLA/PETG/... 等非 TPU 已设材质) -> nullptr, 走原刚性常量(零差异)。
         const _tpu_param *tpu_p = nullptr;
+#if BMCU_TPU_ENABLE
         {
+            // 精准按通道隔离: TPU 判定只看运行期 filament_type(由 set_filament 实时写入),
+            // 不再依赖 bambubus_filament_id(Flash 持久化, 易残留 -> 设TPU后切PETG仍残TPU的元凶)。
+            // 这样: 设 TPU 的通道走 TPU 分支; 设 PETG/PLA 的通道 filament_type!=tpu -> 走 v3.2.1 原逻辑;
+            // 设 TPU 再改回 PETG -> filament_type=petg -> 完全恢复 v3.2.1 行为(无残留污染)。
             auto &F = ams[motion_control_ams_num].filament[CHx];
-            if (F.filament_type != _filament_type::unknown &&
-                is_tpu_id(F.bambubus_filament_id))
+            if (F.filament_type == _filament_type::tpu)
             {
-                tpu_p = tpu_param_fixed((uint8_t)CHx);   // 本地保存型号为 TPU -> 写死表真实型号
+                tpu_p = tpu_param_fixed((uint8_t)CHx);   // 本通道被设为 TPU -> 写死表真实型号
             }
-            else if (F.filament_type == _filament_type::unknown &&
-                     filament_channel_inserted[CHx])
-            {
-                // 空通道首料：filament_type 还没识别/没设, 这里 tpu_p 保持 nullptr(走刚性常量)。
-                // 注意: 用户要的"空通道首料按最软料进/自吸"已在 DM 自动装载分支用统一最软力
-                // DM_AUTO_PWM_PUSH_EMPTY 实现(四通道一致、不随设置料变化), 不在此处套写死表。
-                // 写死表 tpu_param_fixed 仅在该通道被打印机设为 TPU(filament_type==tpu)后生效。
-                tpu_p = nullptr;
-            }
+            // 其余情形(filament_type==unknown 空通道首料 / PLA/PETG 等非TPU已设) -> tpu_p 保持 nullptr,
+            // 走 v3.2.1-fix105 原刚性常量(零差异)。空通道首料自吸力已恢复刚性 DM_AUTO_PWM_PUSH。
         }
+#endif // BMCU_TPU_ENABLE
         tpu_p_run = tpu_p;   // 间歇门控统一出口用的运行期指针(全程有效)
 #if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
         bool  dm_autoload_active = false;
@@ -1167,14 +1161,12 @@ public:
         #if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
                     // 空通道首次自吸: 用户明确要求自吸力四通道一致、不受设置料(TPU/PETG)影响。
                     // 故空通道(dm_loaded==0 或 filament_type==unknown)一律用统一最软自吸力,
-                    // 既不用刚性900(避免硬拽), 也不按写死表分通道(避免设TPU后吸不动)。
-                    // 写死表 tpu_p 只在"已识别为TPU且非首料"的正式送料/间歇门控才生效。
-                    const bool empty_channel = (dm_loaded[CHx] == 0u) ||
-                                                (ams[motion_control_ams_num].filament[CHx].filament_type == _filament_type::unknown);
-                    const float dm_push_pwm = empty_channel ? DM_AUTO_PWM_PUSH_EMPTY
-                                                            : (tpu_p ? tpu_p->feed_pwm_lo : DM_AUTO_PWM_PUSH);
-                    const float dm_pull_pwm = empty_channel ? DM_AUTO_PWM_PULL_EMPTY
-                                                            : (tpu_p ? tpu_p->feed_pwm_lo : DM_AUTO_PWM_PULL);
+                    // 自吸(空/非空通道)一律用刚性 DM_AUTO_PWM_PUSH/PULL, 与 v3.2.1-fix105 一致。
+                    // 不再引入 empty_channel 分支(旧 v4.0-tpu 曾把空通道首料砍到 DM_AUTO_PWM_PUSH_EMPTY=750,
+                    // 导致"设完 TPU 后自吸被干扰/吸不动")。
+                    // 仅"已识别为 TPU 且非空通道"的正式送料走 tpu_p 写死表(TPU 功能暂未启用, 此处保留不报错)。
+                    const float dm_push_pwm = (tpu_p ? tpu_p->feed_pwm_lo : DM_AUTO_PWM_PUSH);
+                    const float dm_pull_pwm = (tpu_p ? tpu_p->feed_pwm_lo : DM_AUTO_PWM_PULL);
                     // --- DM 自动装载（阶段1 + 阶段2）---
                     if (filament_channel_inserted[CHx] && (dm_loaded[CHx] == 0u))
                     {
@@ -3071,10 +3063,12 @@ static void motor_motion_run(int error, uint64_t time_now, uint32_t now_ticks)
             else
 #endif
             {
-                // v4.0-tpu: FILAMENT_RGB 宏关闭时，用 RGB 验证"程序是否真的识别到 TPU"。
+                // v4.0-tpu: FILAMENT_RGB 开启时, 用 RGB 验证"程序是否真的识别到 TPU"。
                 //  - 识别到 TPU（本地保存型号为 GFU**，is_tpu_id）：显示该型号专属纯色（一眼看出是哪种 TPU）
                 //  - 非 TPU（PLA/PETG/ABS/PA/未知/other）：统一显示一种颜色，便于和 TPU 区分
-                if (is_tpu_id(ams[motion_control_ams_num].filament[i].bambubus_filament_id))
+                // BMCU_TPU_ENABLE 关闭时一律走非 TPU 色(彻底隔离 TPU 影响)。
+#if BMCU_TPU_ENABLE
+                if (ams[motion_control_ams_num].filament[i].filament_type == _filament_type::tpu)
                 {
                     uint8_t tr, tg, tb;
                     // v4.0-tpu: 显示"内部真实写死表型号"色, 而非下发 GFU98(打印机看到的),
@@ -3083,6 +3077,7 @@ static void motor_motion_run(int error, uint64_t time_now, uint32_t now_ticks)
                     r = tr; g = tg; b = tb;
                 }
                 else
+#endif // BMCU_TPU_ENABLE
                 {
                     r = TPU_NON_TPU_RGB_R;
                     g = TPU_NON_TPU_RGB_G;
@@ -3237,8 +3232,11 @@ void MC_PWM_init()
     TIM_TimeBaseInitTypeDef TIM_TimeBaseStructure;
     TIM_OCInitTypeDef TIM_OCInitStructure;
 
+    // 电机 PWM 载波: 原 PSC=1 -> ARR=999 -> 36MHz/2000 = 18kHz(处于人耳边缘, 线圈共振啸叫明显)。
+    // 改为 PSC=0 -> 36MHz/1000 = 36kHz, 超出人耳上限且远离机械共振峰, 显著抑噪。
+    // ARR 保持 999, Motion_control_set_PWM 的 0~1000 满幅映射无需改动。
     TIM_TimeBaseStructure.TIM_Period        = 999;
-    TIM_TimeBaseStructure.TIM_Prescaler     = 1;
+    TIM_TimeBaseStructure.TIM_Prescaler     = 0;
     TIM_TimeBaseStructure.TIM_ClockDivision = 0;
     TIM_TimeBaseStructure.TIM_CounterMode   = TIM_CounterMode_Up;
 
