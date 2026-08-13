@@ -446,7 +446,8 @@ void SSD1306_OLED::draw_channels()
         const _filament& f = ams[BAMBU_BUS_AMS_NUM].filament[r];
 
         int n = 0;
-        line[n++] = (char)('0' + r);
+        // 实际通道为 1~4，屏上显示 +1（数组下标 r 仍为 0~3）
+        line[n++] = (char)('0' + (r + 1));
         line[n++] = ':';
 
         if (f.meters <= 0.05f)
@@ -617,9 +618,9 @@ void SSD1306_OLED::tick(bool aht20_present, bool aht20_online,
             case oled_action::action_idle:  actxt = "STOP";     break;  // 停止
             default:                        actxt = "NONE";     break;
         }
-        // 第0行："CHx LOADING"
+        // 第0行："CHx LOADING"，通道号显示 1~4（实际通道），数组下标 +1
         int k = 0;
-        l0[k++] = 'C'; l0[k++] = 'H'; l0[k++] = (char)('0' + s_action_ch); l0[k++] = ' ';
+        l0[k++] = 'C'; l0[k++] = 'H'; l0[k++] = (char)('0' + (s_action_ch + 1u)); l0[k++] = ' ';
         for (int i = 0; actxt[i] && k < 16; i++) l0[k++] = actxt[i];
         while (k < 16) l0[k++] = ' ';
         l0[16] = 0;
