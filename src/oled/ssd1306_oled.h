@@ -65,17 +65,22 @@ public:
     // 运行时探测 OLED ACK（不修改 s_ready，仅返回是否应答）。供热插拔/掉线检测。
     static bool probe_ack();
 
-    // 整屏清（全黑）。覆盖整屏重画前调用。
+    // 整屏清（全黑）：仅清空后台 framebuffer（s_fb），不发 I2C。
     static void clear();
 
-    // 清第 row 行（0..3），避免整屏闪烁。覆盖单行内容前调用。
+    // 清第 row 行（0..3）：仅清空 framebuffer 对应两页，不发 I2C。
     static void clear_line(uint8_t row);
 
-    // 在 (row, col) 显示单个 8x16 字符（row∈[0,3], col∈[0,15]）。
+    // 在 (row, col) 显示单个 8x16 字符（row∈[0,3], col∈[0,15]）：写入 framebuffer。
     static void show_char(uint8_t row, uint8_t col, char ch);
 
-    // 在 (row, col) 显示字符串，自动截断到行宽（16 字符）。
+    // 在 (row, col) 显示字符串，自动截断到行宽（16 字符）：写入 framebuffer。
     static void show_text(uint8_t row, uint8_t col, const char* str);
+
+    // 差值刷新：把 framebuffer（s_fb）与已发送帧（s_fb_prev）做逐字节比对，
+    // 仅把变化字节经 I2C 发给 SSD1306。不变区域零 I2C 流量、永不整屏清 => 不闪、低耗。
+    // 由绘制完成后（tick 末尾）统一调用一次。
+    static void flush();
 
     // 当前 OLED 是否初始化成功（探测 ACK）。供内容层按需判断。
     static bool is_ready() { return s_ready; }
@@ -156,6 +161,11 @@ public:
 private:
     static inline bool s_ready = false;   // init() 探测结果
 
+    // 后台显存 framebuffer：模拟整块 OLED 显存（8 页 × 128 列），所有绘制先写这里，
+    // 再由 flush() 只把与 s_fb_prev 不同的字节发到 SSD1306。这是去闪+降耗的核心。
+    static inline uint8_t s_fb[8][OLED_W];      // 当前帧（绘制目标）
+    static inline uint8_t s_fb_prev[8][OLED_W]; // 已发送到 OLED 的上一帧（差值基准）
+
     // 各行上次显示内容缓存（去闪烁用）：仅当内容变化才重写该行。
     // 每行 16 字符 + 1 结束符；OLED_LINES=4 行。
     static inline char s_line_buf[OLED_LINES][OLED_COLS + 1u];
@@ -185,10 +195,6 @@ private:
 
     // 仅在内容变化时才清行并重写，避免每帧整行擦写导致的闪烁。
     static void draw_line_if_changed(uint8_t row, const char* text);
-
-    // 软覆盖：先把整行用空格写满（不调 clear_line 清屏，无黑闪），再写新内容。
-    // 用于抓包页中变化极频繁的行（如 RX 原始片段），消除 clear_line 整行黑闪。
-    static void draw_line_soft(uint8_t row, const char* text);
 
     // 写命令 / 写数据（经 AHT20 总线底层）
     static void write_cmd(uint8_t c);

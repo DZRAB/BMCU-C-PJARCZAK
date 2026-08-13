@@ -38,11 +38,21 @@ uint32_t g_rx_cnt = 0u;         // RX 指令累计数（心跳/在线检测等�
 uint32_t g_tx_cnt = 0u;         // TX 指令累计数
 char     g_last_rx_raw[40] = {0}; // 最近一次 RX 原始指令前段（抓包页显示用，不全文）
 
-// 最近“重要指令”独立缓存：心跳包(ONL/MC/MOT/STU)频刷会覆盖 g_last_rx_label，
-// 导致抓包页/霸屏来不及看就跳成心跳。重要指令(非心跳)单独留存，稳定显示不被刷掉。
-char     g_last_imp_rx_label[8] = {0};  // 最近重要 RX 标签（RFID/VER/RD/SN/MC确认等）
-uint64_t g_last_imp_rx_ms   = 0u;       // 最近重要 RX 时间戳
-char     g_last_imp_rx_raw[40] = {0};   // 最近重要 RX 原始片段
+// 动作指令显示缓存（v4.0-tpu 调试精简）：只记录“打印机动作前后”真正相关的指令，
+// 过滤掉一切周期轮询/心跳（SN/VER/RD/RFID/ONL/MC 以及纯维持态 MOT/STU），
+// 让抓包页第0行 R 稳定显示最近一次动作指令（on_use/stop/before_on_use/before_pullb），
+// 不被每秒刷新的 SN 淹没。平时保持显示上一条动作指令（秒数累计）。
+char     g_last_act_rx_label[16] = {0}; // 动作指令可读标签，如 "on_use"/"stop"/"b_onuse"/"b_pullb"
+uint64_t g_last_act_rx_ms   = 0u;       // 该动作指令时间戳
+char     g_last_act_rx_raw[40] = {0};   // 该动作指令原始片段
+
+// 未知指令专用缓存（v4.0-tpu 调试）：记录代码未登记的类型（default 分支），
+// 如打印机可能下发的“打印成功/暂停/停止”等。不过滤、不按动作判断，
+// 抓包页以 '?' 前缀特别高亮，且累计未知计数 g_unk_cnt，方便用户排查“未知交互”。
+char     g_last_unk_label[8] = {0};     // 固定 "UNK"
+uint64_t g_last_unk_ms   = 0u;          // 最近未知指令时间戳
+char     g_last_unk_raw[40] = {0};      // 最近未知指令原始片段
+uint32_t g_unk_cnt = 0u;                // 未知指令累计计数
 
 void oled_log_rx(const char *label, const char *raw)
 {
@@ -50,21 +60,54 @@ void oled_log_rx(const char *label, const char *raw)
     if (raw)   { strncpy(g_last_rx_raw,   raw,   sizeof(g_last_rx_raw)   - 1); g_last_rx_raw[sizeof(g_last_rx_raw) - 1] = '\0'; }
     g_last_rx_ms = time_ms64();
     g_rx_cnt++;
-    // 心跳包(ONL/MC/MOT/STU)频刷，不覆盖"重要指令"缓存；其余(如 RFID/VER/RD/SN)留存。
-    if (label && !(strcmp(label, "ONL") == 0 || strcmp(label, "MC") == 0
-                || strcmp(label, "MOT") == 0 || strcmp(label, "STU") == 0))
+
+    // 未知指令（UNK）：不过滤，直接写入专用缓存 + 计数，供抓包页特别显示。
+    if (label && strcmp(label, "UNK") == 0)
     {
-        strncpy(g_last_imp_rx_label, label, sizeof(g_last_imp_rx_label) - 1);
-        g_last_imp_rx_label[sizeof(g_last_imp_rx_label) - 1] = '\0';
-        if (raw) { strncpy(g_last_imp_rx_raw, raw, sizeof(g_last_imp_rx_raw) - 1); g_last_imp_rx_raw[sizeof(g_last_imp_rx_raw) - 1] = '\0'; }
-        g_last_imp_rx_ms = g_last_rx_ms;
+        strncpy(g_last_unk_label, "UNK", sizeof(g_last_unk_label) - 1);
+        g_last_unk_label[sizeof(g_last_unk_label) - 1] = '\0';
+        if (raw) { strncpy(g_last_unk_raw, raw, sizeof(g_last_unk_raw) - 1); g_last_unk_raw[sizeof(g_last_unk_raw) - 1] = '\0'; }
+        g_last_unk_ms = g_last_rx_ms;
+        g_unk_cnt++;
+        return;   // 未知指令不进入动作缓存，单独处理
+    }
+
+
+    // 周期轮询/心跳类指令（SN/VER/RD/RFID/ONL/MC 等）只计数，不进任何显示缓存，
+    // 避免抓包页被打印机每秒轮询刷成一片，干扰查看“动作前后”的真实指令。
+    // 仅当本包是“动作相关”的 MOT/STU（statu_flag + motion_flag 组合表示状态切换）时，
+    // 才写入 g_last_act_rx_* 动作显示缓存，供抓包页第0行稳定显示。
+    if (label && (strcmp(label, "MOT") == 0 || strcmp(label, "STU") == 0))
+    {
+        // MOT/STU 包结构：buf[6]=statu_flag, buf[8]=motion_flag（见 bambubus_printer_motion_package_struct）
+        const uint8_t sf = (raw && raw[0]) ? (uint8_t)raw[6] : 0u;
+        const uint8_t mf = (raw && raw[0]) ? (uint8_t)raw[8] : 0u;
+        const char* act = nullptr;
+        if      (sf == 0x09 && (mf == 0x7F || mf == 0xA5)) act = "b_onuse"; // before_on_use
+        else if (sf == 0x07 && mf == 0x7F)                 act = "on_use";   // on_use（供料中）
+        else if (sf == 0x07 && mf == 0x00)                 act = "stop";     // stop_on_use
+        else if (sf == 0x09 && mf == 0x3F)                 act = "b_pullb";  // before_pull_back
+        // 其余（纯维持态心跳，如已经 on_use 后每秒的 0x7F 维持帧、0x03/0x00 等）不记录
+        if (act)
+        {
+            strncpy(g_last_act_rx_label, act, sizeof(g_last_act_rx_label) - 1);
+            g_last_act_rx_label[sizeof(g_last_act_rx_label) - 1] = '\0';
+            if (raw) { strncpy(g_last_act_rx_raw, raw, sizeof(g_last_act_rx_raw) - 1); g_last_act_rx_raw[sizeof(g_last_act_rx_raw) - 1] = '\0'; }
+            g_last_act_rx_ms = g_last_rx_ms;
+        }
     }
 }
 void oled_log_tx(const char *label)
 {
-    if (label) { strncpy(g_last_tx_label, label, sizeof(g_last_tx_label) - 1); g_last_tx_label[sizeof(g_last_tx_label) - 1] = '\0'; }
-    g_last_tx_ms = time_ms64();
     g_tx_cnt++;
+    // 只把动作相关的回发（MOT/STU）写入 TX 显示缓存；周期轮询类（SN/VER/RD/RFID/ONL/MC）
+    // 不覆盖，避免抓包页 TX 行被每秒轮询刷掉，干扰查看动作前后回发。
+    if (label && (strcmp(label, "MOT") == 0 || strcmp(label, "STU") == 0))
+    {
+        strncpy(g_last_tx_label, label, sizeof(g_last_tx_label) - 1);
+        g_last_tx_label[sizeof(g_last_tx_label) - 1] = '\0';
+        g_last_tx_ms = time_ms64();
+    }
 }
 
 // v4.0-tpu: 由 Bambu filament_id（tray_info_idx）前缀判定材质类型。
@@ -1420,6 +1463,10 @@ bambubus_package_type bambubus_run()
                 break;
 
             default:
+                // 未知指令（代码未登记的包，如打印机发来的“打印成功/暂停/停止”等可能的指令）。
+                // 用户主要想抓这类包：不过滤、不按动作判断，直接记录进专用“未知指令”缓存，
+                // 并在抓包页以 '?' 前缀特别高亮显示（见 oled_log_rx 内部 + draw_pkt_overlay）。
+                oled_log_rx("UNK", (const char *)buf);
                 break;
             }
 

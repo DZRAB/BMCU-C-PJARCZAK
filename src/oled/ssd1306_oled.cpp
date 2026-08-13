@@ -52,11 +52,12 @@ void SSD1306_OLED::draw_pkt_overlay(uint64_t now)
 {
     char buf[OLED_COLS + 1u];
 
-    // 优先显示"重要指令"缓存(非心跳 ONL/MC/MOT/STU)，避免被高频心跳刷掉来不及看；
-    // 重要缓存为空时回退到最近一次 RX(可能是心跳)。
-    const char* rx_lbl = (g_last_imp_rx_label[0] != '\0') ? g_last_imp_rx_label : g_last_rx_label;
-    const uint64_t rx_ms = (g_last_imp_rx_label[0] != '\0') ? g_last_imp_rx_ms : g_last_rx_ms;
-    const char* rx_raw = (g_last_imp_rx_label[0] != '\0') ? g_last_imp_rx_raw : g_last_rx_raw;
+    // 第0行 R：显示“动作指令”缓存（仅 on_use/stop/before_on_use/before_pullb 等动作前后指令），
+    // 周期轮询(SN/VER/RD/RFID)与纯心跳已过滤，平时稳定显示上一条动作指令及其秒数。
+    // 动作缓存为空（开机还没发生过动作）时回退显示提示符 "--"，而非被 SN 淹没。
+    const char* rx_lbl = (g_last_act_rx_label[0] != '\0') ? g_last_act_rx_label : "--";
+    const uint64_t rx_ms = (g_last_act_rx_label[0] != '\0') ? g_last_act_rx_ms : 0u;
+    const char* rx_raw = (g_last_act_rx_label[0] != '\0') ? g_last_act_rx_raw : g_last_rx_raw;
 
     fmt_pkt_header(buf, 'R', 'X', rx_lbl,
                    (rx_ms == 0u) ? 0u : (now - rx_ms));
@@ -66,20 +67,26 @@ void SSD1306_OLED::draw_pkt_overlay(uint64_t now)
                    (g_last_tx_ms == 0u) ? 0u : (now - g_last_tx_ms));
     draw_line_if_changed(1, buf);
 
-    // L2: 最近 RX(重要)原始指令前段（抓包原文片段）
+    // L2: 最近“抓包片段”——未知指令优先（标 '?' 前缀特别显示），否则显示动作指令原始片段。
+    //     未知指令一般偶发，不会每秒刷；动作片段变化频繁。本行后续改由 framebuffer 差值刷新去闪。
     uint8_t k = 0;
-    buf[k++] = '>'; buf[k++] = ' ';
-    for (uint8_t i = 0; rx_raw[i] && k < OLED_COLS; i++) buf[k++] = rx_raw[i];
+    const char* frag;
+    char frag_prefix;
+    if (g_last_unk_label[0] != '\0') { frag = g_last_unk_raw; frag_prefix = '?'; }  // 未知指令：特别高亮
+    else                             { frag = rx_raw;        frag_prefix = '>'; }
+    buf[k++] = frag_prefix; buf[k++] = ' ';
+    for (uint8_t i = 0; frag[i] && k < OLED_COLS; i++) buf[k++] = frag[i];
     while (k < OLED_COLS) buf[k++] = ' ';
     buf[OLED_COLS] = 0;
-    draw_line_soft(2, buf);   // 原始片段变化频繁，用软覆盖去闪
+    draw_line_if_changed(2, buf);   // 后续由 framebuffer 差值刷新，无需 soft 覆盖
 
-    // L3: 累计计数（收包/设料/RX总/TX总）
+    // L3: 累计计数（收包/设料/RX总/TX总/未知?N）
     k = 0;
     buf[k++] = 'P'; append_uint(buf, k, g_pkg_recv_cnt);
     buf[k++] = ' '; buf[k++] = 'S'; append_uint(buf, k, g_set_filament_cnt);
     buf[k++] = ' '; buf[k++] = 'r'; append_uint(buf, k, g_rx_cnt);
     buf[k++] = ' '; buf[k++] = 't'; append_uint(buf, k, g_tx_cnt);
+    buf[k++] = ' '; buf[k++] = '?'; append_uint(buf, k, g_unk_cnt);
     while (k < OLED_COLS) buf[k++] = ' ';
     buf[OLED_COLS] = 0;
     draw_line_if_changed(3, buf);
@@ -272,16 +279,20 @@ void SSD1306_OLED::init()
         write_cmd(InitCmd[i]);
 
     SSD1306_OLED::clear();
+    // 初始化时真正清屏一次：把 framebuffer 全 0 同步到屏幕与 s_fb_prev。
+    for (uint8_t page = 0; page < 8; page++)
+    {
+        set_pos(page, 0);
+        static const uint8_t zero[OLED_W] = {0};
+        oled_write_data_bulk(zero, OLED_W);
+    }
+    memcpy(s_fb_prev, s_fb, sizeof(s_fb_prev));
 }
 
 void SSD1306_OLED::clear()
 {
-    static const uint8_t zero[OLED_W] = {0};   // 全 0 即清屏像素
-    for (uint8_t page = 0; page < 8; page++)
-    {
-        set_pos(page, 0);
-        oled_write_data_bulk(zero, OLED_W);     // 一次事务清一整页（128 字节）
-    }
+    // 仅清空后台 framebuffer（不发 I2C）。下次 flush() 会把全屏写为 0。
+    memset(s_fb, 0, sizeof(s_fb));
     // 同步清空行缓存：清屏后屏上无内容，但 s_line_buf 仍残留旧文本会导致
     // draw_line_if_changed 误判"未变化"而不重绘（标题/内容消失）。清空缓存
     // 可使下一次绘制强制全量重写。
@@ -293,12 +304,8 @@ void SSD1306_OLED::clear_line(uint8_t row)
 {
     if (row >= OLED_LINES) return;
     uint8_t page0 = (uint8_t)(row * 2u);   // 8x16 字模占 2 页
-    static const uint8_t zero[OLED_W] = {0};
     for (uint8_t p = 0; p < 2; p++)
-    {
-        set_pos((uint8_t)(page0 + p), 0);
-        oled_write_data_bulk(zero, OLED_W); // 一次事务清两页（256 字节）
-    }
+        memset(s_fb[page0 + p], 0, OLED_W); // 仅清 framebuffer 对应两页
 }
 
 void SSD1306_OLED::show_char(uint8_t row, uint8_t col, char ch)
@@ -310,12 +317,9 @@ void SSD1306_OLED::show_char(uint8_t row, uint8_t col, char ch)
     uint8_t pg0 = (uint8_t)(row * 2u);
     const uint8_t* p = OLED_F8x16[OLED_FONT_MAP[(uint8_t)ch - 0x20u]];  // 经映射查紧凑字模
 
-    // 上 8 行：一次事务连续写 8 字节
-    set_pos(pg0, x);
-    oled_write_data_bulk(p, 8u);
-    // 下 8 行：一次事务连续写 8 字节
-    set_pos((uint8_t)(pg0 + 1u), x);
-    oled_write_data_bulk(p + 8u, 8u);
+    // 写入 framebuffer（上 8 行 / 下 8 行），不立即发 I2C。
+    for (uint8_t i = 0; i < 8; i++) s_fb[pg0][(uint8_t)(x + i)]     = p[i];
+    for (uint8_t i = 0; i < 8; i++) s_fb[pg0 + 1u][(uint8_t)(x + i)] = p[i + 8u];
 }
 
 void SSD1306_OLED::show_text(uint8_t row, uint8_t col, const char* str)
@@ -326,6 +330,37 @@ void SSD1306_OLED::show_text(uint8_t row, uint8_t col, const char* str)
     {
         show_char(row, c++, *str);
         str++;
+    }
+}
+
+// 差值刷新：把 framebuffer 与已发送帧逐字节比对，仅把变化字节发给 SSD1306。
+// 按页扫描，对每页找出连续变化段，一次 bulk 写（set_pos 定位一次 + 连续数据）。
+// 不变字节完全不碰 I2C => 极低总线占用、绝不整屏清 => 无黑闪。
+void SSD1306_OLED::flush()
+{
+    for (uint8_t page = 0; page < 8; page++)
+    {
+        uint8_t col = 0;
+        while (col < OLED_W)
+        {
+            if (s_fb[page][col] == s_fb_prev[page][col])
+            {
+                col++;
+                continue;
+            }
+            // 找到变化段起点，延伸到连续变化结束
+            uint8_t start = col;
+            uint8_t end = col;
+            while (end < OLED_W && s_fb[page][end] != s_fb_prev[page][end])
+                end++;
+            uint8_t n = (uint8_t)(end - start);
+            set_pos(page, start);
+            oled_write_data_bulk(&s_fb[page][start], n);
+            // 同步已发送帧
+            for (uint8_t i = 0; i < n; i++)
+                s_fb_prev[page][(uint8_t)(start + i)] = s_fb[page][(uint8_t)(start + i)];
+            col = end;
+        }
     }
 }
 
@@ -340,19 +375,6 @@ void SSD1306_OLED::draw_line_if_changed(uint8_t row, const char* text)
     s_line_buf[row][OLED_COLS - 1] = '\0';
     clear_line(row);
     show_text(row, 0, text);
-}
-
-// 软覆盖：整行先写空格（字模全 0，等价于清屏但不发清屏事务），再写新内容。
-// 不调用 clear_line，避免 SSD1306 整行擦写的可见黑闪；用于变化极频繁的行。
-void SSD1306_OLED::draw_line_soft(uint8_t row, const char* text)
-{
-    if (row >= OLED_LINES) return;
-    if (strcmp(s_line_buf[row], text) == 0) return;   // 未变化，不动屏幕
-    strncpy(s_line_buf[row], text, OLED_COLS - 1);
-    s_line_buf[row][OLED_COLS - 1] = '\0';
-    static const char blanks[OLED_COLS + 1u] = "                ";  // 16 空格
-    show_text(row, 0, blanks);   // 空格覆盖整行（无黑闪）
-    show_text(row, 0, text);     // 再写真实内容
 }
 
 void SSD1306_OLED::draw_message(const char* line0, const char* line1,
@@ -762,107 +784,10 @@ void SSD1306_OLED::tick(bool aht20_present, bool aht20_online,
     // 若当前正处于霸屏，下方会直接顶屏，轮询页的切换被自然“暂停”（s_page 已前进，
     // 霸屏结束后显示的就是新一页，且因上面刚刷过 s_page_next_ms，会停留满 5 秒）。
 
-    // ===== 1) 动作覆盖优先 =====
-    if (s_action != oled_action::action_none && now < s_action_until_ms)
-    {
-        char l0[OLED_COLS + 1u];
-        const char* actxt = "NONE";
-        switch (s_action)
-        {
-            case oled_action::action_load:  actxt = "LOADING";  break;  // 进料
-            case oled_action::action_unload:actxt = "UNLOAD";   break;  // 退料
-            case oled_action::action_feed:  actxt = "FEEDING";  break;  // 送料
-            case oled_action::action_idle:  actxt = "STOP";     break;  // 停止
-            default:                        actxt = "NONE";     break;
-        }
-        // 第0行："CHx LOADING"，通道号显示 1~4（实际通道），数组下标 +1
-        int k = 0;
-        l0[k++] = 'C'; l0[k++] = 'H'; l0[k++] = (char)('0' + (s_action_ch + 1u)); l0[k++] = ' ';
-        for (int i = 0; actxt[i] && k < 16; i++) l0[k++] = actxt[i];
-        while (k < 16) l0[k++] = ' ';
-        l0[16] = 0;
-        draw_line_if_changed(0, l0);
-
-        // 第1行：该通道材质/型号
-        draw_line_if_changed(1, material_label(s_action_ch));
-        // 第2行：动作含义提示
-        const char* hint = "";
-        switch (s_action)
-        {
-            case oled_action::action_load:   hint = "feed in";  break;
-            case oled_action::action_unload: hint = "pull out"; break;
-            case oled_action::action_feed:   hint = "supplying";break;
-            default:                         hint = "";         break;
-        }
-        draw_line_if_changed(2, hint);
-        // 第3行：动作期间仍显示最近 RX 抓包（标签+秒），含 SN 等指令，
-        // 方便进料/退料霸屏时也能看到打印机下发的真实指令，而非空行。
-        {
-            char rxln[OLED_COLS + 1u];
-            int k = 0;
-            rxln[k++] = 'R'; rxln[k++] = ' ';
-            if (g_last_rx_label[0] != '\0')
-            {
-                for (int i = 0; g_last_rx_label[i] && k < 6; i++) rxln[k++] = g_last_rx_label[i];
-                while (k < 7) rxln[k++] = ' ';
-                uint32_t age = (g_last_rx_ms == 0u) ? 0u : (uint32_t)((now - g_last_rx_ms) / 1000u);
-                if (age > 999u) age = 999u;
-                char num[4]; int ni = 0;
-                if (age == 0) num[ni++] = '0';
-                while (age > 0) { num[ni++] = (char)('0' + (age % 10)); age /= 10; }
-                for (int i = ni - 1; i >= 0; i--) { if (k < 10) rxln[k++] = num[i]; }
-                rxln[k++] = 's';
-            }
-            else
-            {
-                rxln[k++] = '-'; rxln[k++] = '-';
-            }
-            while (k < 16) rxln[k++] = ' ';
-            rxln[16] = 0;
-            draw_line_if_changed(3, rxln);
-        }
-        return;   // 动作期间不轮询
-    }
-    // 动作结束：清动作状态，回轮询（不整屏 clear，避免黑闪；靠 draw_line_if_changed 自然过渡）
-    if (s_action != oled_action::action_none)
-    {
-        s_action = oled_action::action_none;
-        s_action_ch = 0xFFu;
-        // 注意：这里不再 clear()，否则整屏黑闪。下一帧由各页面 draw_line_if_changed
-        // 用新内容覆盖即可平滑回到抓包页。
-    }
-
-    // ===== 1.5) 指令霸屏（v4.0-tpu 抓包：Q4/Q5/Q6）=====
-    // 最近一次"有意义"的 RX 或 TX 指令在 3 秒内时，覆盖显示该指令内容（RX 标签 + 原始片段 + TX 标签），
-    // 方便记录和调试打印机发来的指令(BMCU 收) 与 BMCU 发出的指令(BMCU 发)（相当于 OLED 抓包）。
-    // 高频包(ONL 在线检测)不霸屏，仅抓包页记录。超时自动回到正常轮询，避免一直霸屏。
-    // 动作霸屏优先（上方已 return），此处仅在无动作时生效。
-    {
-        const uint64_t rx_age = (g_last_rx_ms == 0u) ? (uint64_t)(-1) : (now - g_last_rx_ms);
-        const uint64_t tx_age = (g_last_tx_ms == 0u) ? (uint64_t)(-1) : (now - g_last_tx_ms);
-        const bool rx_recent = (g_last_rx_label[0] != '\0') && (rx_age < OLED_PKT_HOLD_MS);
-        const bool tx_recent = (g_last_tx_label[0] != '\0') && (tx_age < OLED_PKT_HOLD_MS);
-        // 高频/心跳级包不霸屏，避免一直顶屏（仍可在抓包页 page_sniffer 看到）。
-        // ONL=在线检测，MOT=电机心跳，STU=状态包：打印机每秒都在发，若顶屏会
-        // 让 4 个轮询页几乎没机会显示（闪一下就没）。仅“偶发重要指令”
-        // （RFID/VER/RD/SN 等）才短暂顶屏 3 秒，便于观察和调试。
-        auto is_highfreq = [](const char* lbl) -> bool {
-            return strcmp(lbl, "ONL") == 0   // 在线检测（每秒）
-                || strcmp(lbl, "MC")  == 0   // 上线确认（打印机频繁发）
-                || strcmp(lbl, "MOT") == 0   // 电机心跳（每秒）
-                || strcmp(lbl, "STU") == 0;  // 状态包（每秒）
-        };
-        const bool rx_important = rx_recent && !is_highfreq(g_last_rx_label);
-        const bool tx_important = tx_recent && !is_highfreq(g_last_tx_label);
-        if (rx_important || tx_important)
-        {
-            // 复用抓包共用绘制（与 page_sniffer 一致），3 秒内顶屏显示最近 RX/TX 指令，
-            // 超时后本 if 不再成立，自动回到正常轮询（不一直霸屏）。
-            // 霸屏期间顺延轮询计时（见 0.5 段），避免霸屏结束瞬间把轮询页切走“闪一下”。
-            draw_pkt_overlay(now);
-            return;   // 指令霸屏期间不轮询
-        }
-    }
+    // ===== 1) 动作覆盖 / 指令霸屏 已移除（v4.0-tpu 调试期）=====
+    // 用户需求：不要霸屏顶屏，收到的信息直接显示到抓包页；且只显示“动作前后”
+    // 打印机下发的指令，过滤掉一直发的周期轮询(SN/VER/RD/RFID/ONL/MC)与纯心跳。
+    // 详见 oled_log_rx()/oled_log_tx() 的过滤逻辑与 draw_pkt_overlay() 的动作缓存显示。
 
     // ===== 2) 页面轮询绘制 =====
     // [临时调试] 设 true 时 OLED 只显示第4页(抓包页 page_sniffer)，方便上机盯 RX/TX 抓包。
@@ -870,6 +795,7 @@ void SSD1306_OLED::tick(bool aht20_present, bool aht20_online,
     if (true)
     {
         draw_sniffer();
+        flush();   // 差值刷新：只发变化字节，不闪不卡
         return;
     }
 
@@ -890,6 +816,7 @@ void SSD1306_OLED::tick(bool aht20_present, bool aht20_online,
         default:
             break;
     }
+    flush();   // 差值刷新：只发变化字节，不闪不卡
 }
 
 #endif // BMCU_OLED
