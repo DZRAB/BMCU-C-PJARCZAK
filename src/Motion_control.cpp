@@ -2189,6 +2189,9 @@ public:
                     const uint32_t phase = (uint32_t)(now_ms % (uint64_t)cyc);
                     // 自吸(DM 自动装载)不进间歇门控: 空管首料持续推更稳更快,
                     // 料未入缓冲头高压区, 不存在"持续顶被压缩挤出"问题。
+                    // dm_autoload_active 仅在双开关(BMCU_DM_TWO_MICROSWITCH)下声明,
+                    // 故该间歇门控整块必须在双开关作用域, 否则单开关编译报未声明。
+#if defined(BMCU_DM_TWO_MICROSWITCH) && (BMCU_DM_TWO_MICROSWITCH + 0)
                     if (feeding_fwd && !dm_autoload_active)
                     {
                         // 推窗口(phase<on)目标=原pwm_out0(给足), 停窗口目标=0(电机靠齿槽保持力不倒退)
@@ -2207,6 +2210,10 @@ public:
                         // 非往前送料(避让/回退): 不间歇, 斜坡值跟随目标, 维持原逻辑
                         tpu_pwm_ramp[CHx] = (float)pwm_out0;
                     }
+#else
+                    // 单开关: 无 dm_autoload_active, 不进间歇门控, 直接跟随目标
+                    tpu_pwm_ramp[CHx] = (float)pwm_out0;
+#endif
                 }
                 else
                 {
