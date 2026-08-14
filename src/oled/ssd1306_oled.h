@@ -165,8 +165,8 @@ public:
     static void draw_unk_log();
 #endif
 
-    // 把 RGB 转成 3 字母颜色简写（RED/GRE/YEL/BLU/CYA/MAG/PUR/ORA/WHI/BLA）。
-    static const char* color_name(uint8_t r, uint8_t g, uint8_t b);
+    // 把运动态枚举转成屏上短标签（≤4字符）
+    static const char* motion_label(_filament_motion m);
 
 private:
     static inline bool s_ready = false;       // 已发过初始化序列即就绪（允许绘制，不依赖 ACK 探测）
@@ -198,18 +198,14 @@ private:
     static inline uint64_t    s_pkt_until_ms = 0;      // 指令霸屏结束时间
 
 
-    // 把运动态枚举转成屏上短标签（≤4字符）
-    static const char* motion_label(_filament_motion m);
-
     // 把材质/TPU型号转成屏上短标签
     static const char* material_label(uint8_t ch);
 
     // 仅在内容变化时才清行并重写，避免每帧整行擦写导致的闪烁。
     static void draw_line_if_changed(uint8_t row, const char* text);
 
-    // 写命令 / 写数据（经 AHT20 总线底层）
+    // 写命令（经 AHT20 总线底层）
     static void write_cmd(uint8_t c);
-    static void write_data(uint8_t d);
 
     // 设置显示起始位置（页寻址）：page∈[0,7]，col∈[0,127]
     static void set_pos(uint8_t page, uint8_t col);
