@@ -241,7 +241,7 @@ AHUB 用 `CRC->DATAR` 硬件 CRC 外设做 32 位校验（`ahubus_package_add_cr
 宏 `BMCU_DM_AUTO_RETRACT` 默认随 `BMCU_DM_TWO_MICROSWITCH` 派生（双开关=1 开、单开关=0 关）；即双开关板默认开启自动回抽、单开关板本就关闭。它仅由双开关派生得到，可用 `-DBMCU_DM_AUTO_RETRACT=0` 在编译期强制关闭。
 
 > **关闭 = 固定回抽长度模式**：`BMCU_DM_AUTO_RETRACT=0` 让双开关板放弃 S2 自动判定，走固定回抽长度逻辑——此时 `AMS_RETRACT_LEN`（编译进去的回抽长度）从“安全上限”变回“真实回抽目标长度”，且必须像 `NO_AUTOLOAD` 那样编译全长度矩阵。
-> 那它有什么实际用处？单开关板（`NO_AUTOLOAD`）本来就提供固定长度全矩阵，所以**绝大多数情况你不需要关它**；唯一不被冗余覆盖的场景是：**双开关硬件（不能刷 `NO_AUTOLOAD` 固件）却想要固定长度回抽**——例如该机器的 S2 传感不可靠、或你就是偏好某个固定长度。除此之外，它只是无害的代码级开关（用 `#ifndef` 定义、默认干净派生）；v3.0 已暴露该开关：`build_one.sh` 第 6 参数 `AUTO_RETRACT=0`、`build_all_firmwares_fast.py` 环境变量 `AUTO_RETRACT=0` 均可触发，触发后双开关也出 39 档固定长度矩阵（总固件数从默认 30 升到 942，全量合计 1884）。`build_all_firmwares_softload.sh` 则固定只出双开关自动回抽版（不读该开关）。
+> 那它有什么实际用处？单开关板（`NO_AUTOLOAD`）本来就提供固定长度全矩阵，所以**绝大多数情况你不需要关它**；唯一不被冗余覆盖的场景是：**双开关硬件（不能刷 `NO_AUTOLOAD` 固件）却想要固定长度回抽**——例如该机器的 S2 传感不可靠、或你就是偏好某个固定长度。除此之外，它只是无害的代码级开关（用 `#ifndef` 定义、默认干净派生）；v3.0 已暴露该开关：`build_one.sh` 第 6 参数 `AUTO_RETRACT=0`、`build_all_firmwares_fast.py` 环境变量 `AUTO_RETRACT=0` 均可触发，触发后双开关也出 39 档固定长度矩阵（总固件数从默认 30 升到 942，全量合计 1884）。
 
 原理：回抽（`pull_back`）时不再依赖编译期固定的 `AMS_RETRACT_LEN`，而是用第二个微动开关 S2 判定料根位置：
 
@@ -802,8 +802,7 @@ TPU 与刚性料（PLA/PETG）的本质差异：高弹性、高摩擦、易堆�
 
 ### 14.8 全量快速编译算法详解（改进点 + TPU 链接稳定性修复）
 
-**为什么原版慢、我们快**：原版 `build_all_firmwares_softload.sh` 走 `pio run` 逐个固件全量重编，
-972 个固件要几小时。我们的 `build_all_firmwares_fast.py` 用**预编译 + 二进制修补**算法，约 1 分钟：
+**为什么快**：原版逐个固件全量重编，972 个固件要几小时。我们的 `build_all_firmwares_fast.py` 用**预编译 + 二进制修补**算法，约 1 分钟：
 
 1. **提取工具链参数（带缓存）**：首次跑一次 `pio run -e moj -v` 抓出 C++/C 编译命令与链接命令，
    存 `.pio_parallel/verbose_cache.*`；之后源文件未变则直接复用，跳过这次 pio 编译（省最多时间）。
@@ -1076,12 +1075,12 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
   ```
   正常送料瞬间的低缓冲不再误锁死，只有持续 8 秒低缓冲（真堵/真卡）才锁死报红灯。
 
-#### 14.13.5 自动重启总开关（测试期可关）
+#### 14.13.5 自动重启总开关（默认关闭，针对机型开启）
 
-- **新增源码开关宏 `BMCU_AUTO_REBOOT_ENABLE`**（定义在 `bambu_bus_ams.h` 顶部，`main.cpp` 已 include 该头文件，两文件共用）。
-- 默认 `0`（**当前 TPU 测试阶段临时关闭**，不动编译脚本）。正式版改 `1` 即重新开启自动重启。
+- **编译宏 `BMCU_AUTO_REBOOT_ENABLE`**（定义在 `bambu_bus_ams.h` 顶部，`#ifndef` 包裹，缺省 `0`）。
+- **默认 `0`（关闭）**：仅【部分机型】打印完成后需要软复位来恢复在线，绝大多数机型不需要，故默认关；针对特定机型编译时由脚本注入 `BMCU_AUTO_REBOOT_ENABLE=1` 开启（见 `build_one.sh` / `build_all_firmwares_fast.py` 环境变量）。
 - 关闭时：`main.cpp` 的状态机整段 + 相关全局变量声明、以及 `bambu_bus_ams.cpp` 的 `g_local_pullback_seen` 置位/extern 均被 `#if BMCU_AUTO_REBOOT_ENABLE` 包住，编译期完全跳过，无未使用警告、无悬空符号。
-- 该开关与 OLED 调试开关、`BMCU_OLED` 总开关、温湿度模拟探测开关并列，属于"需手动改源码"的开关之一（见 16.3）。
+- 该开关与 `BMCU_OLED` / `BMCU_AHT20` / `BMCU_TPU_ENABLE` / `BMCU_OLED_DEBUG` 一样，统一由编译脚本注入，不手动改源码（见 16.3 / 编译指南）。
 
 > **改动文件汇总**：`ahub_bus.cpp`（嗅探+判定）、`ahub_bus.h`（声明+include）、`main.cpp`（状态机+开关）、`bambu_bus_ams.cpp`（退料标志置位+开关）、`_bus_hardware.cpp/.h`（假离线接口）、`Motion_control.cpp`（8 秒累计锁死修复）。
 
@@ -1211,9 +1210,9 @@ SSD1306 若每次刷新都整行 `clear_line()`（清整行再写）或整屏 `c
 
 ### 15.6 编译开关与 OLED 默认行为
 
-- **OLED 默认编入固件，无脚本开关**。`src/oled/ssd1306_oled.h` 顶部用 `#ifndef BMCU_OLED / #define BMCU_OLED / #endif` 默认定义 `BMCU_OLED`，驱动代码无条件编译进固件；运行时 `init()` 自动 `probe_ack()` 探测屏是否存在，无屏则跳过显示、零影响（详见 [`编译指南.md`](./编译指南.md) 的 `BMCU_OLED` 说明）。
-- **要彻底关闭 OLED**（剥离驱动代码、省 Flash/RAM）：直接注释掉 `ssd1306_oled.h` 顶部那 3 行宏定义即可，**不改动 `build_one.sh`、`build_all_firmwares_fast.py` 或 `platformio.ini`**。
-- 历史上 `build_one.sh` 曾用第 11 参数 `OLED=1` 注入 `-DBMCU_OLED`，现已移除：头文件侧默认开使该脚本注入无额外作用，反而容易让人误以为"默认关"。
+- **OLED 由脚本注入 `BMCU_OLED` 控制**（缺省 `1`，编入固件）。`src/oled/ssd1306_oled.h` 顶部用 `#ifndef BMCU_OLED / #define BMCU_OLED 1 / #endif`，可被脚本 `-DBMCU_OLED=0` 覆盖；运行时 `init()` 自动 `probe_ack()` 探测屏是否存在，无屏则跳过显示、零影响（详见 [`编译指南.md`](./编译指南.md) 的 `BMCU_OLED` 说明）。
+- **要彻底关闭 OLED**（剥离驱动代码、省 Flash/RAM）：编译时传 `BMCU_OLED=0`（老主板无屏场景），**不改动 `build_one.sh`、`build_all_firmwares_fast.py` 或 `platformio.ini`**（头文件侧的 `#ifndef` 仅作缺省兜底）。
+- 注：历史上曾用手动注释 `ssd1306_oled.h` 顶部宏来关 OLED，现统一改脚本注入，不再需要改文件。
 
 ### 15.7 抓包页与未知指令改造日志（v4.0-tpu 调试期）
 
@@ -1260,7 +1259,7 @@ SSD1306 若每次刷新都整行 `clear_line()`（清整行再写）或整屏 `c
 - **不丢不重、每条都记**（用户强调按序），无去重；缓冲溢出时环形覆盖最老条目（最多保留 24 条）；
 - 关联：与抓包页、`?N` 计数同源（`g_unk_cnt` 仍累计总次数）。
 
-**归入调试模式的原因**：抓包页 + 未知指令记录页都只在"上机盯通讯"时用，正常发布不需要，故统一收到 `BMCU_OLED_DEBUG` 宏下，正常固件不含这两页及其绘制代码（约省 1KB Flash）。要上机排查通讯时，手动在 `src/oled/ssd1306_oled.h` 或 `src/bambu_bus_ams.h` 里 `#define BMCU_OLED_DEBUG` 后重编即可（非常规需求，不进编译脚本）。
+**归入调试模式的原因**：抓包页 + 未知指令记录页都只在"上机盯通讯"时用，正常发布不需要，故统一收到 `BMCU_OLED_DEBUG` 宏下，正常固件不含这两页及其绘制代码（约省 1KB Flash）。要上机排查通讯时，编译时传 `BMCU_OLED_DEBUG=1`（脚本仅在 `=1` 时注入 `-DBMCU_OLED_DEBUG`，因该宏用 `#ifdef` 判断只看定义不看值），正常发布默认 `0` 不编入调试页。
 
 #### 15.7.4 Flash 优化：F8x16 字模裁剪（commit `67d6c9e`）
 
@@ -1324,46 +1323,37 @@ AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_
 |---|---|---|---|
 | `AUTO_RETRACT` | `1` / `0` | `1` | 默认自动回抽（972 个固件）；设 `0`=固定长度（1884 个） |
 | `BMCU_TPU_FIX0`~`BMCU_TPU_FIX3` | `GFUxx` | 全 `GFU85` | 4 通道写死型号 |
+| `BMCU_OLED` | `1` / `0` | `1` | OLED 状态屏总开关；老主板无屏传 `0` |
+| `BMCU_AHT20` | `1` / `0` | `1` | AHT20 温湿度传感器总开关；老主板无传感器传 `0` |
+| `BMCU_TPU_ENABLE` | `1` / `0` | `1` | TPU 送料逻辑总开关；`0`=回退 v3.2 刚性 |
+| `BMCU_AUTO_REBOOT_ENABLE` | `1` / `0` | `0` | 打印完成软复位；默认关，仅部分机型传 `1` 开启 |
+| `BMCU_OLED_DEBUG` | `1` / `0` | `0` | OLED 调试页（抓包+未知指令）；仅 `=1` 时注入 `-DBMCU_OLED_DEBUG` |
 
 > ⚠️ **批量脚本的写死表不参与"变体分类/构建缓存 key"**：所有生成的固件使用**同一组**写死型号（由这 4 个环境变量决定）。本脚本即"全量统一写死表"用途，不会为不同写死组合分别产出/缓存。若需不同通道组合各编一份，请改用 `build_one.sh` 多次单编。
 
-### 16.3 必须手动改源码 / 编译参数的开关（共 5 处）
+### 16.3 编译开关总览（全部脚本注入，无需手改源码）
 
-其余所有宏都由脚本注入，**不用改程序**。以下开关需手动处理（都不碰 `platformio.ini`）：
+v4.0-tpu 设计上**所有功能开关都通过编译脚本注入**，正常情况下无需手动改 `src/` 头文件（头文件侧保留 `#ifndef ... #define ... 缺省值` 仅作缺省兜底）。严禁改动 `platformio.ini`。
 
-1. **OLED 总开关** — `src/oled/ssd1306_oled.h` 第 37-38 行
-   ```c
-   #ifndef BMCU_OLED
-   #define BMCU_OLED   // ← 注释掉这 3 行即可彻底关闭 OLED 驱动（省 Flash/RAM）
-   #endif
-   ```
-   默认开；想省空间或确认无屏时注释掉即可。
-   > 关闭路径修复说明（v4.0-tpu 后期）：早期版本 `bambu_bus_ams.cpp` 有 4 处 `SSD1306_OLED::notify_action(...)` 调用漏了 `#ifdef BMCU_OLED` 保护，手动注释 `#define BMCU_OLED` 后编译器报 'SSD1306_OLED' has not been declared、整个固件编不过——那时"关 OLED 省空间"不可用。现已补上 `#ifdef` 保护，关闭路径恢复：实测注释后 Flash 由 95.7% 降至 89.9%（省约 3.5KB），可正常出固件。
+`build_one.sh` 可选环境变量（缺省值）：
+- `BMCU_OLED`（默认 `1`）、`BMCU_AHT20`（默认 `1`）、`BMCU_TPU_ENABLE`（默认 `1`）、`BMCU_AUTO_REBOOT_ENABLE`（默认 `0`）、`BMCU_OLED_DEBUG`（默认 `0`，仅 `=1` 时注入 `-DBMCU_OLED_DEBUG`）
 
-2. **OLED 调试模式宏 `BMCU_OLED_DEBUG`** — 非常规需求，**不进编译脚本**（无需命令行/平台传参）。需要时手动在文件里定义即可：
-   - 在 `src/oled/ssd1306_oled.h` 顶部 `#ifndef BMCU_OLED` 之前加一行 `#define BMCU_OLED_DEBUG`；
-   - 或在 `src/bambu_bus_ams.h` 的 `UNK_RING_N` 定义附近同理加 `#define BMCU_OLED_DEBUG`。
-   定义后，固件额外编入**调试模式页**：`page_sniffer`（抓包页）与 `page_unk_log`（未知指令完整记录页），且 `tick()` 的轮询边界改为只循环这两页（跳过正常三页）。**正常发布不定义此宏** → 这两页整段不编译、不参与轮询（约省 1KB Flash），OLED 只走正常三页轮询。调试固件上机即只轮询抓包页+记录页；若想临时看正常页，去掉宏重编即可（仅调试用，发布固件不碰）。
+`build_all_firmwares_fast.py` 同名环境变量，缺省值同上（另含 `BMCU_TPU_FIX0~3` 默认全 `GFU85`）。
 
-3. **温湿度模拟探测开关** — `src/sim_aht20.h` 第 15 行
-   ```c
-   #define SIM_AHB_PROBE_ENABLE 0   // ← 改 1 开启（调试用，非编译宏）
-   ```
-   `1`=开启后，每次响应打印机查询时自增温湿度使屏幕显示随查询周期跳变，便于测量打印机拉取周期；`0`=关闭（函数为空操作）。直接改这一行重编即可，对所有编译方式通用，无需命令行或平台传参。
+**唯一仍需手改源码的调试宏**（都不碰 `platformio.ini`，改完重编）：
+- **OLED 强制固定显示某页（调试）** — `src/oled/ssd1306_oled.h` 顶部的 `BMCU_OLED_FORCE_PAGE`：未定义时正常轮询；定义后即固定显某页（排查用，测完删除）。
 
-4. **自动重启（打印完成软复位）总开关** — `src/bambu_bus_ams.h` 顶部
-   ```c
-   #define BMCU_AUTO_REBOOT_ENABLE 1   // ← 改 0 关闭自动重启；当前默认 1（开启）
-   ```
-   `1`=开启后，本机退料 + 本机及总线所有 AMS 全 idle 持续 30s → 假离线 10s → 软复位（见 14.13）；`0`=关闭，TPU 测试阶段可关闭、方便反复上料调试。该宏定义在共享头文件，`main.cpp` 与 `bambu_bus_ams.cpp` 共用，改一处即全工程生效，**不动编译脚本**。
+> 历史说明（已废弃，勿再用手改）：早期曾用「手动注释 `ssd1306_oled.h` 的 `#define BMCU_OLED`」关 OLED，或手动定义 `BMCU_OLED_DEBUG` / `BMCU_AUTO_REBOOT_ENABLE` / `BMCU_TPU_ENABLE` / `SIM_AHB_PROBE_ENABLE` 来开关功能——这些现在一律改脚本注入（自动重启默认 `0` 关、其余默认 `1` 开）。早期版本 `bambu_bus_ams.cpp` 有 4 处 `SSD1306_OLED::notify_action(...)` 漏 `#ifdef BMCU_OLED` 保护导致关 OLED 编不过的问题，现已修复（关闭路径实测 Flash 由 95.7% 降至 89.9%）。
 
-> 注：第 2 项 `BMCU_OLED_DEBUG` 是**手动改源码定义**的非常规调试开关（不进编译脚本、无命令行参数）；第 1/3/4 项是**手动改源码**开关。原文档把"OLED 调试页开关"写成 `if(true){draw_comm;return}` 并已删除——现统一由 `BMCU_OLED_DEBUG` 宏控制，正常发布固件不编入调试页。
+**各开关语义速查**（详细见 [`编译指南.md`](./编译指南.md) 宏对比表）：
+- `BMCU_OLED`：OLED 状态屏总开关；运行时自动探测屏、无屏零影响；老主板无屏传 `0` 剥离驱动。
+- `BMCU_AHT20`：AHT20 温湿度传感器总开关；运行时自动探测、无传感器零影响；老主板无传感器传 `0` 剥离驱动（关闭务必保持 `BMCU_USE_HW_I2C2` 默认开）。
+- `BMCU_TPU_ENABLE`：TPU 送料逻辑总开关；`0`=全局熔断 TPU 回到 v3.2 刚性。
+- `BMCU_AUTO_REBOOT_ENABLE`：**默认 `0`（关闭）**；仅部分机型需要软复位恢复，针对机型传 `1` 开启。
+- `BMCU_OLED_DEBUG`：OLED 调试页（抓包+未知指令记录）；正常发布 `0` 不编入。
 
-5. **TPU 送料逻辑总开关** — `src/bambu_bus_ams.h` 顶部（与 `BMCU_AUTO_REBOOT_ENABLE` 相邻）
-   ```c
-   #define BMCU_TPU_ENABLE 1   // ← 改 0 全局熔断 TPU 送料；当前默认开
-   ```
-   `0`=**全局熔断 TPU 送料**：`Motion_control.cpp` run() 顶部 `tpu_p` 强制恒为 `nullptr`，所有通道（含设了 TPU 的）一律走 v3.2.1-fix105 原刚性常量；RGB 识别色也不走 TPU 专属色。`1`=**开启 TPU 送料逻辑（精准按通道隔离，当前默认）**：仅"被打印机设为 TPU（`filament_type==tpu`）的通道"走 TPU 写死表分支；设 PETG/PLA 的通道 `filament_type` 非 tpu → 走 v3.2.1-fix105 原逻辑（零差异）；设 TPU 再改回 PETG → `filament_type` 变 `petg` → 完全恢复 v3.2.1 行为。TPU 判定只看运行期 `filament_type`（由 `set_filament` 实时写入），**不再依赖 `bambubus_filament_id`（Flash 残留源）**，故绝无残留污染、可随时切回。另：此宏开启后，**RGB_OFF 模式下**设 TPU 的通道会显示"内部真实写死表型号"专属色（预期功能）。当前阶段默认 `1`（出稳定版策略：不设 TPU 即全走 v3.2.1，行为稳定；若要出纯刚性固件验证隔离，临时改 `0` 即可）。
+**TPU 送料总开关 `BMCU_TPU_ENABLE` 详情**：
+`0`=**全局熔断 TPU 送料**：`Motion_control.cpp` run() 顶部 `tpu_p` 强制恒为 `nullptr`，所有通道（含设了 TPU 的）一律走 v3.2.1-fix105 原刚性常量；RGB 识别色也不走 TPU 专属色。`1`=**开启 TPU 送料逻辑（精准按通道隔离，当前默认）**：仅"被打印机设为 TPU（`filament_type==tpu`）的通道"走 TPU 写死表分支；设 PETG/PLA 的通道 `filament_type` 非 tpu → 走 v3.2.1-fix105 原逻辑（零差异）；设 TPU 再改回 PETG → `filament_type` 变 `petg` → 完全恢复 v3.2.1 行为。TPU 判定只看运行期 `filament_type`（由 `set_filament` 实时写入），**不再依赖 `bambubus_filament_id`（Flash 残留源）**，故绝无残留污染、可随时切回。另：此宏开启后，**RGB_OFF 模式下**设 TPU 的通道会显示"内部真实写死表型号"专属色（预期功能）。
 
 ### 16.4 当前推荐用法（出稳定版）与已知问题
 
@@ -1372,7 +1362,7 @@ AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_
 `dev/v4.0-tpu` 在 `v3.2.1-fix105`（AHT20 修复稳定版）之上叠加了三块内容：
 
 1. **OLED 状态屏**（`BMCU_OLED`，默认开）—— 与材质无关，PLA/PETG/TPU 都受益，属稳定功能。
-2. **自动重启（打印完成软复位）** —— 当前 `BMCU_AUTO_REBOOT_ENABLE=1` **默认开启**，出稳定版保持开启即可（见 16.3 第 4 处）。
+2. **自动重启（打印完成软复位）** —— `BMCU_AUTO_REBOOT_ENABLE` **默认 `0`（关闭）**：仅部分机型打印完成后需要软复位恢复在线，绝大多数机型不需要，故默认关；针对特定机型编译时由脚本注入 `=1` 开启（见 16.3 / 编译指南）。
 3. **TPU 送料逻辑** —— 见第 14 章，**仅在打印机将该通道设为 TPU（`filament_type==tpu`/下发 `GFU98`）时生效**；设 PLA/PETG/ABS 等非 TPU 时 `tpu_p==nullptr`，所有送料分支走 `tpu_p ? TPU参数 : v3.2原常量`，**与 v3.2.1-fix105 零差异**。
 
 > **结论**：当前固件当「v3.2.1-fix105 + OLED」给别人用时，**只要对方不设 TPU 型号，跑的就是 v3.2.1 原路径**（TPU 代码静态编入但运行期不触发）。可直接出稳定版，无需回退代码。
@@ -1394,7 +1384,7 @@ AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_
      - 设 PETG/PLA → `filament_type=petg/pla` → `tpu_p=nullptr` → **走 v3.2.1 原刚性常量，与基线零差异**；
      - 设 TPU 再改回 PETG → `set_filament` 写 `filament_type=petg` → 立即恢复 v3.2.1 行为；
      - 拔料 → `filament_type` 清 `unknown` 且 `bambubus_filament_id` 数组清零（防御性）→ 彻底无残留。
-   - **额外保险**：`BMCU_TPU_ENABLE` 宏（默认 1，见 16.3 第 5 处）包住整个 TPU 判定。当前阶段默认 `1`（开启 TPU 送料逻辑）；要出纯刚性固件验证隔离或暂不用 TPU，临时改 `0` 即全局熔断，绝不走 TPU。
+   - **额外保险**：`BMCU_TPU_ENABLE` 宏（默认 1，见 16.3）包住整个 TPU 判定，由编译脚本注入（`BMCU_TPU_ENABLE=0` 即全局熔断）。当前阶段默认 `1`（开启 TPU 送料逻辑）；要出纯刚性固件验证隔离或暂不用 TPU，编译时传 `0` 即可，绝不走 TPU。
    - 判定改为 `filament_type` 后，`bambubus_filament_id` 不再参与任何送料/RGB 运行期判定（仅作显示字段），故 Flash 残留型号不再污染逻辑。
 
 **注意**：v4.0-tpu 有 3 处「全材质生效」的改进也被带入（对非 TPU 也是正向的，不是回归）：
@@ -1424,8 +1414,11 @@ AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_
 | `DBMCU_P1S` / `BMCU_SOFT_LOAD` | 参数 1 `MODE` | P1S / 软加载模式 |
 | `BMCU_DM_AUTO_RETRACT` | 参数 6 `AUTO_RETRACT` | 固定长度回抽（默认随双开关派生） |
 | `BMCU_TPU_FIX0~3` | 参数 7~10 / 环境变量 | 4 通道写死型号表（缺省全 `GFU85`） |
-| `BMCU_OLED` | **头文件默认开** | OLED 驱动总开关（改头文件，非脚本注入） |
-| `BMCU_OLED_DEBUG` | **手动在文件定义，默认不定义** | OLED 调试模式：编入抓包页+未知指令记录页，并强制只显抓包页。非常规需求，不进编译脚本；需要时手动 `#define`（见 16.3 第 2 项）。正常发布不定义（省 ~1KB Flash） |
+| `BMCU_OLED` | 环境变量 `BMCU_OLED`（默认 `1`） | OLED 驱动总开关；老主板无屏传 `0` 剥离 |
+| `BMCU_AHT20` | 环境变量 `BMCU_AHT20`（默认 `1`） | AHT20 温湿度传感器总开关；老主板无传感器传 `0` 剥离 |
+| `BMCU_TPU_ENABLE` | 环境变量 `BMCU_TPU_ENABLE`（默认 `1`） | TPU 送料逻辑总开关；`0`=回退 v3.2 刚性 |
+| `BMCU_AUTO_REBOOT_ENABLE` | 环境变量 `BMCU_AUTO_REBOOT_ENABLE`（默认 `0`） | 打印完成软复位；默认关，仅部分机型传 `1` 开启 |
+| `BMCU_OLED_DEBUG` | 环境变量 `BMCU_OLED_DEBUG`（默认 `0`） | OLED 调试模式：编入抓包页+未知指令记录页，强制只显抓包页。仅 `=1` 时脚本注入 `-DBMCU_OLED_DEBUG`；正常发布不定义（省 ~1KB Flash） |
 
 
 

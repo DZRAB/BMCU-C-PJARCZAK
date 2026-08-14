@@ -118,6 +118,9 @@ public:
         page_channels,    // 四通道概览（材质/颜色/有无料/运动态）
         page_comm,        // 通讯监控（BMCU<->打印机 收包/设料统计）
         page_sniffer,     // v4.0-tpu 抓包页（RX/TX 指令记录）
+#ifdef BMCU_OLED_DEBUG
+        page_unk_log,     // v4.0-tpu 未知指令完整记录页（仅调试模式）
+#endif
         page_count
     };
 
@@ -154,6 +157,10 @@ public:
     // 以及收包/设料累计计数，便于调试记录打印机与 BMCU 的通讯内容。
     static void draw_sniffer();
 
+#ifdef BMCU_OLED_DEBUG
+    // v4.0-tpu 未知指令完整记录页（自动翻页）：仅调试模式编入。
+    static void draw_unk_log();
+#endif
 
     // 把 RGB 转成 3 字母颜色简写（RED/GRE/YEL/BLU/CYA/MAG/PUR/ORA/WHI/BLA）。
     static const char* color_name(uint8_t r, uint8_t g, uint8_t b);

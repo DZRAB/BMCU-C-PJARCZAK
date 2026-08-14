@@ -11,7 +11,6 @@
 #include "Debug_log.h"
 #include "aht20/aht20.h"
 #include "oled/ssd1306_oled.h"   // OLED 驱动（BMCU_OLED 宏包住，默认不编译）
-#include "sim_aht20.h"
 #include "hal/time_hw.h"
 #include <string.h>
 
@@ -226,6 +225,8 @@ int main(void)
     // 蓝灯=检测到 AHT20；绿灯=成功读到一次温湿度（可正常工作）；
     // 检测不到或读失败均不阻塞，立即进入正常 BMCU 逻辑（含首次开机校准）。
     // 探测以“能否成功读一次温湿度”为准。
+    // BMCU_AHT20=0（老主板无传感器）时整段跳过：不实例化驱动逻辑、不占用 I2C。
+#if BMCU_AHT20
     g_aht20.init();
     {
         float t = 0.0f, h = 0.0f;
@@ -242,6 +243,7 @@ int main(void)
         SYS_RGB.set_RGB(0x00, 0x00, 0x00, 0);
         RGB_update();
     }
+#endif // BMCU_AHT20
 
 #ifdef BMCU_OLED
     // OLED 在 AHT20 自检后立即初始化（复用其 I2C 引脚），让屏从开机最早阶段就参与，
@@ -294,12 +296,16 @@ int main(void)
     if (SSD1306_OLED::is_ready())
     {
         // 开机完成：切到常规画面（有 AHT20 显温湿度，无则 NO AHT20）。
+#if BMCU_AHT20
         if (g_aht20.is_online())
             SSD1306_OLED::draw_aht20(true, true,
                                      g_aht20.temperature_c,
                                      g_aht20.humidity_percent, true);
         else
             SSD1306_OLED::draw_aht20(false, false, 0.0f, 0.0f, true);
+#else
+        SSD1306_OLED::draw_aht20(false, false, 0.0f, 0.0f, true); // 编译期无 AHT20：显 NO AHT20
+#endif // BMCU_AHT20
     }
 #endif // BMCU_OLED
 
@@ -438,6 +444,8 @@ int main(void)
 
         // ===== AHT20 环境温湿度（非阻塞采样）=====
         // 在线时 2 秒采样一次；离线后延长至 10 秒尝试恢复，连续 10 次失败则 is_online() 为 false。
+        // BMCU_AHT20=0（老主板无传感器）时整段跳过：温湿度保持 0，由打印机协议层原样上报。
+#if BMCU_AHT20
         {
             static uint64_t aht20_next_ms  = 0;
             static uint64_t aht20_deadline = 0;
@@ -468,11 +476,7 @@ int main(void)
                 aht20_waiting = false;
             }
         }
-
-        // ===== 软件模拟 AHT20 温湿度（测试用，无硬件时）=====
-        // 探测模式下温湿度由 bambu_bus_ams.cpp 在每次响应打印机查询时
-        // 调用 sim_aht20_probe_step() 自增；无需在此周期调用。
-        // AHT20 实物到位后改用真实传感器，本模拟整体停用。
+#endif // BMCU_AHT20
 
 #ifdef BMCU_OLED
         // ===== OLED 显示（复用 AHT20 软件 I2C 总线）=====
@@ -511,11 +515,16 @@ int main(void)
                 // v4.0 OLED 增强：调 tick() 统一调度多页轮询 + 动作覆盖显示。
                 // tick 内部按能力矩阵处理：无 AHT20 时温湿度页显示 NO AHT20；
                 // 有动作（notify_action 触发）时优先覆盖显示，否则轮询各页。
+#if BMCU_AHT20
                 const bool aht20_present = g_aht20.is_online();
                 SSD1306_OLED::tick(aht20_present, aht20_present,
                                    g_aht20.temperature_c,
                                    g_aht20.humidity_percent,
                                    comm_ok);
+#else
+                // 编译期无 AHT20：温湿度页显 NO AHT20，不刷温湿度（省 I2C 且语义清晰）。
+                SSD1306_OLED::tick(false, false, 0.0f, 0.0f, comm_ok);
+#endif // BMCU_AHT20
             }
         }
 #endif // BMCU_OLED

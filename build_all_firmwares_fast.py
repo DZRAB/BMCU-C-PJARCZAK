@@ -43,6 +43,22 @@ OUT_DIR = "firmwares"
 # 注意：写死表不参与"变体分类/构建缓存 key"（VARIANT_MACROS 不含 BMCU_TPU_FIX*），
 #       所有批量固件使用同一组写死型号——本脚本即"全量统一写死表"用途。
 TPU_FIX = [os.environ.get(f"BMCU_TPU_FIX{i}", "GFU85").strip() or "GFU85" for i in range(4)]
+
+# v4.0-tpu: 可选编译宏开关（环境变量注入，缺省安全值；全量统一，不进变体缓存 key）
+#   老主板（无 AHT20 / 无 OLED）可显式传 0 剥离驱动省 Flash/RAM；新主板保持默认 1。
+#   自动重启默认关(0)：仅部分机型需要，针对机型编译时 BMCU_AUTO_REBOOT_ENABLE=1 开启。
+#   OLED 调试页（抓包/未知指令）默认关(0)：上机排查通讯时 BMCU_OLED_DEBUG=1 开启。
+def _env_bool(name, default):
+    v = os.environ.get(name)
+    if v is None or v.strip() == "":
+        return default
+    return 1 if v.strip() not in ("0", "false", "False", "no", "NO") else 0
+
+OPT_OLED      = _env_bool("BMCU_OLED", 1)
+OPT_AHT20     = _env_bool("BMCU_AHT20", 1)
+OPT_TPU_EN    = _env_bool("BMCU_TPU_ENABLE", 1)
+OPT_REBOOT    = _env_bool("BMCU_AUTO_REBOOT_ENABLE", 0)
+OPT_OLED_DBG  = _env_bool("BMCU_OLED_DEBUG", 0)
 OUT_ROOT = OUT_DIR
 PIO_ENV = "fw"
 PARALLEL_DIR = ".pio_parallel"
@@ -600,8 +616,13 @@ for combo in sorted(mode_combos):
     os.makedirs(vdir, exist_ok=True)
     defs = variant_defines(dm, rgb, p1s, soft_load, ams_num)
     defs_ph = variant_defines(dm, rgb, p1s, soft_load, ams_num, retract=f"{PLACEHOLDER_FLOAT}f")
-    # v4.0-tpu: 4 通道写死型号宏无条件注入所有固件（通用固件内置 TPU 逻辑）
+    # v4.0-tpu: 4 通道写死型号宏 + 可选开关宏无条件注入所有固件（通用固件内置 TPU 逻辑）
     fix_defs = [f"-DBMCU_TPU_FIX{i}={TPU_FIX[i]}" for i in range(4)]
+    fix_defs += [f"-DBMCU_OLED={OPT_OLED}", f"-DBMCU_AHT20={OPT_AHT20}",
+                 f"-DBMCU_TPU_ENABLE={OPT_TPU_EN}", f"-DBMCU_AUTO_REBOOT_ENABLE={OPT_REBOOT}"]
+    # BMCU_OLED_DEBUG 用 #ifdef 判断（只看定义不看值），故仅在 =1 时注入，绝不注入 =0
+    if OPT_OLED_DBG == 1:
+        fix_defs += ["-DBMCU_OLED_DEBUG"]
     defs += fix_defs
     defs_ph += fix_defs
     for obj_path, (src, compiler, flags) in compile_map.items():
@@ -881,6 +902,8 @@ log(f"  成功     : {total_tasks - len(failed_builds)}")
 log(f"  失败     : {len(failed_builds)}")
 log(f"  输出目录 : {OUT_ROOT}/")
 log(f"  Manifest : {manifest_path}")
+log(f"  TPU_FIX  : {TPU_FIX[0]}/{TPU_FIX[1]}/{TPU_FIX[2]}/{TPU_FIX[3]}")
+log(f"  OPT开关  : OLED={OPT_OLED} AHT20={OPT_AHT20} TPU={OPT_TPU_EN} REBOOT={OPT_REBOOT} OLED_DEBUG={OPT_OLED_DBG}")
 log("-" * 60)
 log(f"  提取参数 : {te}分{tse}秒")
 log(f"  预编译.o : {tp}分{tsp}秒  ({total_pre} 个)")

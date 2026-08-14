@@ -19,16 +19,26 @@
 #   TPU0..3  (可选) 各通道 Bambu filament_id 写死型号（GFU98/GFU00/GFU02/GFU95/GFU90/GFU85）。固件内置 TPU 逻辑，
 #            仅当打印机将该通道设为 TPU for AMS(GFU98) 时生效，内部用写死型号跑；不提供则全部保底 GFU85。
 #            与普通固件数量一致，不新增变体维度。
-#   OLED     （无脚本开关）默认编入固件（src/oled/ssd1306_oled.h 顶部宏默认开，运行时自动探测屏、无屏零影响）。
-#            如需彻底关闭 OLED 以省 Flash/RAM，注释掉 ssd1306_oled.h 顶部 #define BMCU_OLED 那 3 行即可，不改动本脚本。
+#
+# 可选编译宏（环境变量注入，缺省值见下；不传即使用缺省）：
+#   BMCU_OLED=1|0                 OLED 状态屏总开关（默认 1；老主板无屏传 0 剥离驱动省 Flash/RAM）
+#   BMCU_AHT20=1|0                AHT20 温湿度传感器总开关（默认 1；老主板无传感器传 0 剥离驱动）
+#   BMCU_TPU_ENABLE=1|0           TPU 送料逻辑总开关（默认 1；老主板不需要 TPU 传 0）
+#   BMCU_AUTO_REBOOT_ENABLE=1|0   打印完成空闲后软复位（默认 0 关；仅部分机型需要，针对机型传 1 开启）
+#   BMCU_OLED_DEBUG=1|0           OLED 调试页（抓包+未知指令记录）开关（默认 0 关；上机排查通讯传 1）
+#   说明：以上宏均通过 PLATFORMIO_BUILD_FLAGS 注入，不修改 platformio.ini（该文件严禁改动）。
+#         OLED/AHT20 即使编入固件，运行时也会自动探测硬件是否存在（无屏/无传感器零影响）。
 #
 # 示例：
-#   bash build_one.sh standard 1 1 SOLO            # 双开关自动回抽 -> solo_2.00f_auto.bin
+#   bash build_one.sh standard 1 1 SOLO            # 双开关自动回抽 -> solo_2.00f_auto.bin（默认全开）
 #   bash build_one.sh standard 1 1 A  0.30 0       # 双开关固定长度模式 -> ams_a_0.30f.bin（同 2.0）
 #   bash build_one.sh p1s 0 1 D 0.80               # 单开关 NO_AUTOLOAD -> ams_d_0.80f.bin
 #   bash build_one.sh standard 1 1 A 0.30 1 GFU98 GFU90 GFU95 GFU85   # 4 通道写死型号
+#   BMCU_OLED=0 BMCU_AHT20=0 bash build_one.sh standard 1 1 SOLO   # 老主板：剥离 OLED+AHT20 驱动
+#   BMCU_AUTO_REBOOT_ENABLE=1 bash build_one.sh standard 1 1 SOLO   # 针对需重启机型开启自动重启
+#   BMCU_OLED_DEBUG=1 bash build_one.sh standard 1 1 SOLO           # 上机排查通讯：开 OLED 调试页
 #
-# 产物相对路径结构（子目录层级与固件命名）与 build_all_firmwares_softload.sh 完全一致，仅根目录为 single_build/，可直接并入 firmwares/ 后发布到 Releases。
+# 产物相对路径结构（子目录层级与固件命名）与 build_all_firmwares_fast.py 完全一致，仅根目录为 single_build/，可直接并入 firmwares/ 后发布到 Releases。
 # 注意：不会删除现有 single_build/，只把单个固件放入对应位置。
 set -euo pipefail
 
@@ -47,13 +57,6 @@ TPU_FIX0="${7:-GFU85}"
 TPU_FIX1="${8:-GFU85}"
 TPU_FIX2="${9:-GFU85}"
 TPU_FIX3="${10:-GFU85}"
-# 注意：OLED 开关不在本脚本处理。
-# OLED 驱动默认即在固件中（见 src/oled/ssd1306_oled.h 顶部
-#   #ifndef BMCU_OLED / #define BMCU_OLED / #endif
-# 默认定义 BMCU_OLED，驱动无条件编入；运行时自动探测屏是否存在，无屏零影响）。
-# 若要彻底关闭 OLED（剥离驱动代码、省 Flash/RAM），直接注释掉
-# ssd1306_oled.h 顶部那 3 行宏定义即可，无需改本脚本或 platformio.ini。
-# 历史上曾有 -DBMCU_OLED 注入开关，现已移除：头文件侧默认开，脚本注入无额外作用。
 
 # --- 模式映射 ---
 case "${MODE}" in
@@ -116,9 +119,29 @@ out_path="single_build/${mode_dir}/${dm_dir}/${rgb_dir}/${slot_dir}/${bin_name}"
 
 echo "=== BUILD: P1S=${p1s} SOFT_LOAD=${softload} DM=${AUTOLOAD} RGB=${RGB} AMS_NUM=${ams_num} RETRACT=${RETRACT}f TPU_FIX[0..3]=${TPU_FIX0}/${TPU_FIX1}/${TPU_FIX2}/${TPU_FIX3} -> ${out_path}"
 
+# ===== 可选编译宏开关（环境变量注入，缺省安全值）=====
+# 老主板（无 AHT20 / 无 OLED）可显式传 0 剥离驱动省 Flash/RAM；新主板保持默认 1。
+# 自动重启默认关(0)：仅部分机型需要，针对机型编译时 BMCU_AUTO_REBOOT_ENABLE=1 开启。
+# OLED 调试页（抓包/未知指令）默认关(0)：上机排查通讯时 BMCU_OLED_DEBUG=1 开启。
+OLED_EN="${BMCU_OLED:-1}"
+AHT20_EN="${BMCU_AHT20:-1}"
+TPU_EN="${BMCU_TPU_ENABLE:-1}"
+REBOOT_EN="${BMCU_AUTO_REBOOT_ENABLE:-0}"
+OLED_DEBUG_EN="${BMCU_OLED_DEBUG:-0}"
+
 # v4.0-tpu: 通用固件内置 TPU 逻辑，无条件注入 4 通道写死型号宏（缺省 GFU85）。
-# 通过 PLATFORMIO_BUILD_FLAGS 环境变量注入（PlatformIO 自动追加到所有环境 build_flags），
+# 所有可选开关 + TPU 写死表统一经 PLATFORMIO_BUILD_FLAGS 注入（PlatformIO 自动追加到所有环境），
 # 不修改 platformio.ini。
+# 注意：BMCU_OLED/AHT20/TPU_ENABLE/REBOOT 用 #if 判断值(=0 即关)，可安全注入 =0；
+#       但 BMCU_OLED_DEBUG 用 #ifdef 判断（只看是否定义，不看值），故仅在 =1 时注入 -DBMCU_OLED_DEBUG，
+#       绝不可注入 =0（否则 #ifdef 仍为真会误激活调试页）。
+BUILD_FLAGS="-DBMCU_TPU_FIX0=${TPU_FIX0} -DBMCU_TPU_FIX1=${TPU_FIX1} -DBMCU_TPU_FIX2=${TPU_FIX2} -DBMCU_TPU_FIX3=${TPU_FIX3}"
+BUILD_FLAGS+=" -DBMCU_OLED=${OLED_EN} -DBMCU_AHT20=${AHT20_EN} -DBMCU_TPU_ENABLE=${TPU_EN}"
+BUILD_FLAGS+=" -DBMCU_AUTO_REBOOT_ENABLE=${REBOOT_EN}"
+if [ "${OLED_DEBUG_EN}" = "1" ]; then
+    BUILD_FLAGS+=" -DBMCU_OLED_DEBUG"
+fi
+
 pio_env=()
 pio_env+=( BAMBU_BUS_AMS_NUM="${ams_num}" )
 pio_env+=( AMS_RETRACT_LEN="${RETRACT}f" )
@@ -127,9 +150,9 @@ pio_env+=( BMCU_ONLINE_LED_FILAMENT_RGB="${RGB}" )
 pio_env+=( DBMCU_P1S="${p1s}" )
 pio_env+=( BMCU_SOFT_LOAD="${softload}" )
 pio_env+=( BMCU_DM_AUTO_RETRACT="${AUTO_RETRACT_FLAG}" )
-# OLED 显示：默认编入固件（由 ssd1306_oled.h 顶部宏控制，无需脚本注入）。
-# 因此 PLATFORMIO_BUILD_FLAGS 只注入 TPU 写死型号表，不含 OLED 开关。
-pio_env+=( PLATFORMIO_BUILD_FLAGS="-DBMCU_TPU_FIX0=${TPU_FIX0} -DBMCU_TPU_FIX1=${TPU_FIX1} -DBMCU_TPU_FIX2=${TPU_FIX2} -DBMCU_TPU_FIX3=${TPU_FIX3}" )
+pio_env+=( PLATFORMIO_BUILD_FLAGS="${BUILD_FLAGS}" )
+
+echo "    OPT: OLED=${OLED_EN} AHT20=${AHT20_EN} TPU=${TPU_EN} REBOOT=${REBOOT_EN} OLED_DEBUG=${OLED_DEBUG_EN}"
 
 env "${pio_env[@]}" pio run -e fw
 

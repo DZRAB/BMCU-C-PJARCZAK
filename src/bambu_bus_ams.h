@@ -2,9 +2,12 @@
 #include <stdint.h>
 
 // v4.0-tpu 方案A: 打印完成后定时软复位(模拟拔插) 总开关
-//   正式版保持开启(=1); TPU 测试阶段临时关闭(=0), 不动编译脚本
-//   注意: 改这里即全工程生效(main.cpp / bambu_bus_ams.cpp 共用)
-#define BMCU_AUTO_REBOOT_ENABLE 1
+//   默认 0(关闭): 仅【部分机型】打印完成后需要软复位来恢复在线, 绝大多数机型不需要;
+//      故交由编译脚本注入(环境变量 BMCU_AUTO_REBOOT_ENABLE=1)针对特定机型开启, 不默认开。
+//   注意: 用 #ifndef 包裹, 脚本通过 -DBMCU_AUTO_REBOOT_ENABLE=1 覆盖; main.cpp / bambu_bus_ams.cpp 共用
+#ifndef BMCU_AUTO_REBOOT_ENABLE
+#define BMCU_AUTO_REBOOT_ENABLE 0
+#endif
 
 // v4.0-tpu: TPU 送料逻辑总开关
 //   1 = 开启(精准按通道隔离): 仅"被打印机设为 TPU(filament_type==tpu)"的通道走 TPU 写死表分支;
@@ -13,7 +16,10 @@
 //      另外 RGB_OFF 模式下, 设 TPU 的通道会显示"内部真实写死表型号"专属色(用户预期功能)。
 //   TPU 判定只看运行期 filament_type(set_filament 实时写入, 拔料清 unknown), 不依赖 Flash 残留型号,
 //   故相互绝对隔离、可随时切回。当前默认 1(出稳定版: 不设 TPU 即全走 v3.2.1, 行为稳定)。
+//   用 #ifndef 包裹, 脚本可通过 -DBMCU_TPU_ENABLE=0 关闭(老主板不需要 TPU 逻辑时)
+#ifndef BMCU_TPU_ENABLE
 #define BMCU_TPU_ENABLE 1
+#endif
 
 enum class bambubus_package_type
 {
@@ -70,9 +76,16 @@ extern uint64_t g_last_unk_ms;
 extern char     g_last_unk_raw[40];
 extern uint32_t g_unk_cnt;
 // 未知指令环形缓冲：最近 UNK_RING_N 条原始片段，抓包页第2行轮显。
+// 调试模式(BMCU_OLED_DEBUG)扩展为 24 条，供完整记录页（draw_unk_log）使用；否则 4 条省 RAM。
+#ifdef BMCU_OLED_DEBUG
+#define UNK_RING_N 24u
+#else
 #define UNK_RING_N 4u
+#endif
 extern char     g_unk_ring[UNK_RING_N][40];
 extern uint64_t g_unk_ring_ms[UNK_RING_N];
+extern uint32_t g_unk_seq[UNK_RING_N];   // 每条未知指令的全局递增序号（记录页按序显示）
+extern uint32_t g_unk_seq_next;          // 全局序号发生器（写入时 ++）
 extern uint8_t  g_unk_ring_head;
 extern uint8_t  g_unk_ring_cnt;
 extern void oled_log_rx(const char *label, const char *raw);

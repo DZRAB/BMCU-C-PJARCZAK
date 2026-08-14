@@ -6,7 +6,6 @@
 #include "app_api.h"
 #include "_bus_hardware.h"
 #include "crc_bus.h"
-#include "sim_aht20.h"
 #include "motion_control.h"
 #include "oled/ssd1306_oled.h"   // v4.0 OLED：动作覆盖显示 notify_action
 
@@ -925,10 +924,6 @@ void get_package_stu_motion(bambubus_printer_stu_motion_package_struct *package_
             filament_flag_on |= (uint8_t)(1u << i);
 
     if (!set_motion(in.filamnet_channel, in.statu_flag, in.motion_flag, fixed_ams_num)) return;
-
-    // 每次响应打印机 filament_motion_long 查询时自增温湿度（探测打印机查询周期用）。
-    // 模拟是否生效由 src/sim_aht20.h 的 SIM_AHB_PROBE_ENABLE 开关控制，关闭时该函数为空操作。
-    sim_aht20_probe_step();
 
     auto *package_send = (bambubus_ams_stu_motion_package_struct *)out;
     memcpy(package_send, &_bambubus_ams_stu_motion_package_struct_init_data, sizeof(*package_send));
