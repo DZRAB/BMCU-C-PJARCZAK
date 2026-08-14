@@ -19,6 +19,7 @@
 #include "tpu_params.h"    // TPU_FIXED_ID[4] v4.0-tpu 写死型号表
 #include <cstring>         // strcmp（过滤高频包 ONL）
 
+#ifdef BMCU_OLED_ENABLED
 // 手写无浮点整数拼串辅助（避免 newlib-nano 拉入浮点 printf 撑爆 FLASH）
 static void append_uint(char* buf, uint8_t& k, uint32_t v)
 {
@@ -112,15 +113,8 @@ void SSD1306_OLED::draw_pkt_overlay(uint64_t now)
     draw_line_if_changed(3, buf);
 }
 
-#ifdef BMCU_OLED
-
-// ---------- 硬件 I2C2 底层发送（PB10=SCL, PB11=SDA）----------
-// 默认启用硬件 I2C2 以节省 Flash（去掉软件 bitbang）。
-// 软件 I2C 代码保留在 aht20.cpp 内，关闭 BMCU_USE_HW_I2C2 即可回退。
-#include "i2c_hw/i2c2_hw.h"
-
-// 兼容：若关闭硬件 I2C2，仍复用 g_aht20 的软件 I2C 总线
-#if !BMCU_USE_HW_I2C2
+// 硬件 I2C2 备用路径已删除（实测比软件 I2C 更费 Flash 且不省空间）。
+// OLED 复用 g_aht20 的软件 I2C 总线（PB10/PB11 开漏）。
 extern AHT20 g_aht20;
 static void oled_start_data(void)
 {
@@ -138,31 +132,20 @@ static void oled_stop(void)
 {
     g_aht20.bus_stop();
 }
-#endif // !BMCU_USE_HW_I2C2
 
 // 单字节命令（init 序列用，本来就零星发）
 void SSD1306_OLED::write_cmd(uint8_t c)
 {
-#if BMCU_USE_HW_I2C2
-    const uint8_t buf[2] = {0x00u, c};
-    hw_i2c2_write(BMCU_OLED_ADDR, buf, 2, true);
-#else
     oled_start_cmd();
     g_aht20.bus_write(c);
     oled_stop();
-#endif
 }
 // 单字节数据（极少用，保留兼容）
 void SSD1306_OLED::write_data(uint8_t d)
 {
-#if BMCU_USE_HW_I2C2
-    const uint8_t buf[2] = {0x40u, d};
-    hw_i2c2_write(BMCU_OLED_ADDR, buf, 2, true);
-#else
     oled_start_data();
     g_aht20.bus_write(d);
     oled_stop();
-#endif
 }
 
 // 设置显示起始位置（页寻址模式）：page∈[0,7]，col∈[0,127]
@@ -173,28 +156,13 @@ void SSD1306_OLED::set_pos(uint8_t page, uint8_t col)
     write_cmd(0x10u + ((col >> 4u) & 0x0Fu));      // 列高 4 位
 }
 
-#if BMCU_USE_HW_I2C2
-// 硬件 I2C2 下批量写 SSD1306 的临时缓冲区：control byte + 最多 128 像素字节。
-// SSD1306_OLED 是单线程串行使用，static 安全；放在文件作用域避免大数组占栈。
-static uint8_t s_oled_bulk_buf[1u + 128u];
-#endif
-
 // 连续发数据（一次 I2C 事务）：先 set_pos 定位，再调本函数批量写
 static void oled_write_data_bulk(const uint8_t* data, uint8_t n)
 {
-#if BMCU_USE_HW_I2C2
-    if (n == 0u || !data) return;
-    if (n > 128u) n = 128u;
-    s_oled_bulk_buf[0] = 0x40u;
-    for (uint8_t i = 0; i < n; ++i)
-        s_oled_bulk_buf[i + 1u] = data[i];
-    hw_i2c2_write(BMCU_OLED_ADDR, s_oled_bulk_buf, (uint8_t)(n + 1u), true);
-#else
     oled_start_data();
     for (uint8_t i = 0; i < n; i++)
         g_aht20.bus_write(data[i]);
     oled_stop();
-#endif
 }
 
 // ---------- 8x16 ASCII 字模（移植自江协科技 OLED 库，字符 0x20~0x7E，每字符 16 字节）----------
@@ -267,32 +235,24 @@ static const uint8_t InitCmd[] = {
 // 探测 OLED ACK（不修改 s_ready，仅返回是否应答）。用于运行时掉线/热插拔检测。
 bool SSD1306_OLED::probe_ack()
 {
-#if BMCU_USE_HW_I2C2
-    // 硬件 I2C2：发 START + 写地址 + STOP，无数据；ACK 成功则返回 true
-    bool ack = hw_i2c2_write(BMCU_OLED_ADDR, nullptr, 0, true);
-    delay(1);
-    return ack;
-#else
     g_aht20.bus_start();
     bool ack = g_aht20.bus_write((uint8_t)(BMCU_OLED_ADDR << 1u));
     g_aht20.bus_stop();
     delay(1);
     return ack;
-#endif
 }
 
 void SSD1306_OLED::init()
 {
-#if BMCU_USE_HW_I2C2
-    // 硬件 I2C2：由本驱动初始化 PB10/PB11 为 AF_OD，并复位外设
-    hw_i2c2_init();
-#else
     // 软件 I2C：引脚已由 main 中 g_aht20.init() 配置（PB10/PB11 开漏）
-#endif
     delay(200);   // 上电稳定（SSD1306 上电到可收命令需 >100ms，给足余量）
 
-    // 探测 OLED ACK（仅记录，不影响后续发序列；部分模块边缘不回 ACK 但仍可点亮）
-    s_ready = probe_ack();
+    // 已发过初始化序列即视为就绪（允许绘制首帧）。部分模块上电边缘不回 ACK
+    // 但仍可被命令序列点亮——若因 ACK 失败就放弃绘制，会导致"开机不显示/
+    // 校准提示看不到"。真实 ACK 结果单独存 s_probe_ack，供 tick() 运行时
+    // 掉线/热插拔检测使用。
+    s_ready     = true;
+    s_probe_ack = probe_ack();
 
     // 初始化命令序列（显式页寻址 + 整屏范围，最大化兼容性）
     for (uint8_t i = 0; i < sizeof(InitCmd); i++)
@@ -825,9 +785,11 @@ void SSD1306_OLED::tick(bool aht20_present, bool aht20_online,
 {
     if (!s_ready) return;                 // 无 OLED：直接返回
 
-    // 运行时掉线/热插拔检测：屏若被拔掉，ACK 丢失则复位 s_ready，
+    // 运行时掉线/热插拔检测：屏若被拔掉，ACK 丢失则复位 s_ready 停止发 I2C，
     // 由 main 的 10s 重探逻辑重新 init 点亮（修复"开机有屏→热插拔不亮"）。
-    if (!probe_ack())
+    // 用 s_probe_ack 记录结果，避免每帧重复调用 probe_ack() 的 I2C 开销。
+    s_probe_ack = probe_ack();
+    if (!s_probe_ack)
     {
         s_ready = false;
         return;
@@ -922,4 +884,4 @@ void SSD1306_OLED::tick(bool aht20_present, bool aht20_online,
     flush();   // 差值刷新：只发变化字节，不闪不卡
 }
 
-#endif // BMCU_OLED
+#endif // BMCU_OLED_ENABLED

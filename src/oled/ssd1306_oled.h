@@ -19,9 +19,10 @@
  *       或按页寻址写命令 0xB0 + 页号（每页 8px，两页拼一行 16px）。
  *     - 所有文本按 (row, col) 坐标显示，row∈[0,3]，col∈[0,15]，row 与像素行号换算遵循上一条。
  *
- *   默认编译：本驱动默认即编入固件（头文件顶部已默认 #define BMCU_OLED），
+ *   默认编译：脚本默认注入 -DBMCU_OLED=1，本驱动编入固件；
  *        运行时自动探测屏是否存在（ACK），无屏则跳过显示、零影响。
- *        若确不需要 OLED，注释掉头文件顶部那行 #define BMCU_OLED 即可（不改动 platformio.ini）。
+ *        若确不需要 OLED，用 BMCU_OLED=0 bash build_one.sh ... 注入即可彻底剥离驱动省 Flash
+ *        （不改动 platformio.ini，也不用手动注释头文件）。
  *
  *   分层设计：
  *     - 驱动层（driver）：init / clear / clear_line / show_char / show_text / 坐标换算。
@@ -33,13 +34,15 @@
  *   字模：移植自江协科技 OLED 库 8x16 ASCII（可见字符 0x20~0x7E）。
  */
 
-// 默认编入 OLED 驱动；如不需要，直接注释掉下面这三行（使 BMCU_OLED 不被定义，
-// 则下方 #ifdef BMCU_OLED 整段不编译）即可，无需改 platformio.ini。
-#ifndef BMCU_OLED
-#define BMCU_OLED
+// OLED 驱动总开关：脚本注入 -DBMCU_OLED=1（默认）/ =0。
+// 注意：#ifdef 只看"是否定义"不看值，而脚本注入 -DBMCU_OLED=0 时宏"已定义但值为0"，
+// 会导致 #ifdef 误判为真、驱动无法剥离。故派生 BMCU_OLED_ENABLED（值判断），
+// 全工程统一用 #ifdef BMCU_OLED_ENABLED 控制 OLED 代码编译，确保 =0 时彻底不编入。
+#if defined(BMCU_OLED) && (BMCU_OLED + 0)
+  #define BMCU_OLED_ENABLED
 #endif
 
-#ifdef BMCU_OLED
+#ifdef BMCU_OLED_ENABLED
 
 // ---------- 屏幕几何常量 ----------
 #define OLED_W       128u
@@ -166,7 +169,8 @@ public:
     static const char* color_name(uint8_t r, uint8_t g, uint8_t b);
 
 private:
-    static inline bool s_ready = false;   // init() 探测结果
+    static inline bool s_ready = false;       // 已发过初始化序列即就绪（允许绘制，不依赖 ACK 探测）
+    static inline bool s_probe_ack = false;    // 真实 ACK 探测结果，仅用于运行时掉线/热插拔检测
 
     // 后台显存 framebuffer：模拟整块 OLED 显存（8 页 × 128 列），所有绘制先写这里，
     // 再由 flush() 只把与 s_fb_prev 不同的字节发到 SSD1306。这是去闪+降耗的核心。
@@ -211,4 +215,4 @@ private:
     static void set_pos(uint8_t page, uint8_t col);
 };
 
-#endif // BMCU_OLED
+#endif // BMCU_OLED_ENABLED

@@ -10,7 +10,7 @@
 #include "ADC_DMA.h"
 #include "Debug_log.h"
 #include "aht20/aht20.h"
-#include "oled/ssd1306_oled.h"   // OLED 驱动（BMCU_OLED 宏包住，默认不编译）
+#include "oled/ssd1306_oled.h"   // OLED 驱动（BMCU_OLED 宏包住，默认编入；=0 可剥离）
 #include "hal/time_hw.h"
 #include <string.h>
 
@@ -245,7 +245,7 @@ int main(void)
     }
 #endif // BMCU_AHT20
 
-#ifdef BMCU_OLED
+#ifdef BMCU_OLED_ENABLED
     // OLED 在 AHT20 自检后立即初始化（复用其 I2C 引脚），让屏从开机最早阶段就参与，
     // 显示系统启动进度，而非等所有初始化跑完才亮。
     SSD1306_OLED::init();
@@ -253,19 +253,19 @@ int main(void)
         SSD1306_OLED::draw_message("BMCU INIT", "", "", "");
 #endif // BMCU_OLED
 
-#ifdef BMCU_OLED
+#ifdef BMCU_OLED_ENABLED
     if (SSD1306_OLED::is_ready())
         SSD1306_OLED::draw_message("BMCU INIT", "CALIB...", "", "");
 #endif // BMCU_OLED
     MC_PULL_calibration_boot();
-#ifdef BMCU_OLED
+#ifdef BMCU_OLED_ENABLED
     if (SSD1306_OLED::is_ready())
         SSD1306_OLED::draw_message("BMCU INIT", "CALIB OK", "", "");
 #endif // BMCU_OLED
 
     ams_datas_read();
 
-#ifdef BMCU_OLED
+#ifdef BMCU_OLED_ENABLED
     if (SSD1306_OLED::is_ready())
         SSD1306_OLED::draw_message("BMCU INIT", "LOAD...", "", "");
 #endif // BMCU_OLED
@@ -292,7 +292,7 @@ int main(void)
         }
     }
 
-#ifdef BMCU_OLED
+#ifdef BMCU_OLED_ENABLED
     if (SSD1306_OLED::is_ready())
     {
         // 开机完成：切到常规画面（有 AHT20 显温湿度，无则 NO AHT20）。
@@ -478,7 +478,7 @@ int main(void)
         }
 #endif // BMCU_AHT20
 
-#ifdef BMCU_OLED
+#ifdef BMCU_OLED_ENABLED
         // ===== OLED 显示（复用 AHT20 软件 I2C 总线）=====
         // 独立于 AHT20 采样临界区：上面采样块已完成 get_measure，此处只读取
         // g_aht20.temperature_c / humidity_percent 并刷新屏幕，不触发 AHT20 测量，

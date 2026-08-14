@@ -1210,9 +1210,21 @@ SSD1306 若每次刷新都整行 `clear_line()`（清整行再写）或整屏 `c
 
 ### 15.6 编译开关与 OLED 默认行为
 
-- **OLED 由脚本注入 `BMCU_OLED` 控制**（缺省 `1`，编入固件）。`src/oled/ssd1306_oled.h` 顶部用 `#ifndef BMCU_OLED / #define BMCU_OLED 1 / #endif`，可被脚本 `-DBMCU_OLED=0` 覆盖；运行时 `init()` 自动 `probe_ack()` 探测屏是否存在，无屏则跳过显示、零影响（详见 [`编译指南.md`](./编译指南.md) 的 `BMCU_OLED` 说明）。
-- **要彻底关闭 OLED**（剥离驱动代码、省 Flash/RAM）：编译时传 `BMCU_OLED=0`（老主板无屏场景），**不改动 `build_one.sh`、`build_all_firmwares_fast.py` 或 `platformio.ini`**（头文件侧的 `#ifndef` 仅作缺省兜底）。
+- **OLED 由脚本注入 `BMCU_OLED` 控制**（缺省 `1`，编入固件）。`src/oled/ssd1306_oled.h` 顶部用**值判断**派生 `BMCU_OLED_ENABLED`：
+  ```cpp
+  #if defined(BMCU_OLED) && (BMCU_OLED + 0)
+    #define BMCU_OLED_ENABLED
+  #endif
+  ```
+  全工程统一用 `#ifdef BMCU_OLED_ENABLED` 控制 OLED 代码编译；脚本 `-DBMCU_OLED=0` 时该宏不派生，驱动**编译期彻底不编入**（不再是"编进去但运行时跳过"）。运行时 `init()` 发过初始化序列即视为就绪、自动 `probe_ack()` 探测屏是否存在，无屏则跳过显示、零影响（详见 [`编译指南.md`](./编译指南.md) 的 `BMCU_OLED` 说明）。
+- **要彻底关闭 OLED**（剥离驱动代码、省 Flash/RAM）：编译时传 `BMCU_OLED=0`（老主板无屏场景），**不改动 `build_one.sh`、`build_all_firmwares_fast.py` 或 `platformio.ini`**。
 - 注：历史上曾用手动注释 `ssd1306_oled.h` 顶部宏来关 OLED，现统一改脚本注入，不再需要改文件。
+- **实测空间（standard/1/0/D/1/GFU02..GFU85 基准，2026-08）**：
+  - `BMCU_OLED=1`（默认）：Flash 60864/61440 (99.1%)，RAM 16040/20480 (78.3%)；
+  - `BMCU_OLED=0`：**Flash 56384 (91.8%)，RAM 13856 (67.7%)** → 关 OLED 省 ≈4.5KB Flash / 2.1KB RAM；
+  - `BMCU_OLED=0 BMCU_AHT20=0`（老主板最小固件）：Flash 54836 (89.3%)，RAM 13780 (67.3%) → 共省 ≈6KB Flash / 2.3KB RAM。
+  - RGB 显示耗材色（`RGB=1` vs `RGB=0`）仅差 448B Flash，RGB_OFF 时"显示耗材色"代码不编入（符合设计，无浪费）。
+  - TPU 写死表（`TPU_PARAMS[]` + `TPU_FIXED_ID[4]`）为 `static const`，约 300B，且默认无条件编入（通用固件设计如此），非空间瓶颈，无需优化。
 
 ### 15.7 抓包页与未知指令改造日志（v4.0-tpu 调试期）
 
@@ -1287,6 +1299,29 @@ SSD1306 若每次刷新都整行 `clear_line()`（清整行再写）或整屏 `c
 - 写入仍用 `strncpy(..., sizeof(g_last_act_rx_label)-1)`，短码更宽裕。
 
 **验证**：单编 `bash build_one.sh standard 1 0 D "" 1 GFU02 GFU95 GFU90 GFU85` 通过，Flash 97.8%（60080/61440）未爆；lint 无新增错误。
+
+#### 15.7.6 开机即显示 + OLED 开关改为值判断（2026-08）
+
+**问题 1（用户实测）：开机屏幕不显示，要校准完才显示。**
+
+根因：`SSD1306_OLED::init()` 里 `s_ready = probe_ack()`——把"屏是否回 ACK"作为能否绘制的门槛。但部分 OLED 模块上电边缘不回 ACK（命令序列仍能点亮），`probe_ack()` 失败 → `s_ready=false`；`draw_message()` 与 `tick()` 开头的 `if (!s_ready) return` 直接丢弃所有首帧（含 main.cpp 的 "BMCU INIT"/"CALIB..." 提示），于是开机无显示、校准完 `tick` 跑起来后才亮。
+
+**改造**（不动任何绘制/轮询逻辑，只改就绪判定语义）：
+- `init()` 改为 `s_ready = true`（已发过初始化序列即允许绘制首帧），真实 ACK 结果另存 `s_probe_ack`（`ssd1306_oled.h` 新增该静态标志）；
+- `tick()` 的运行时掉线/热插拔检测改用 `s_probe_ack`（`probe_ack()` 失败才 `s_ready=false` 停发 I2C），开机首帧不再被 ACK 门槛阻塞；
+- main.cpp 的 `if (SSD1306_OLED::is_ready())` 开机即成立 → "BMCU INIT" / "CALIB..." / "CALIB OK" 提示正常绘制。
+- 效果：开机即显示、校准提示可见；真正的掉屏检测仍基于 `probe_ack()`（运行时拔屏才停）。
+
+**问题 2（实测暴露）：`BMCU_OLED=0` 注入后 Flash 完全没变小（仍是 60864）。**
+
+根因：原 `ssd1306_oled.h` 顶部 `#ifndef BMCU_OLED / #define BMCU_OLED / #endif` 强制定义了 `BMCU_OLED`，且全工程用 `#ifdef BMCU_OLED` 判断——**`#ifdef` 只看"是否定义"不看值**，脚本注入 `-DBMCU_OLED=0` 时宏"已定义但值为 0"，`#ifdef` 误判为真，驱动实现（init/flush/draw/tick 全部）始终编入，`=0` 形同虚设。
+
+**改造**：统一改为值判断——头文件顶部派生 `BMCU_OLED_ENABLED`（见 15.6），`ssd1306_oled.h/.cpp`、`main.cpp`、`bambu_bus_ams.cpp` 中所有 `#ifdef BMCU_OLED`（非 DEBUG）改为 `#ifdef BMCU_OLED_ENABLED`；`.cpp` 实现体整体纳入该宏守卫。`BMCU_OLED=0` 时整段（类声明 + 全部实现 + 调用）编译期不编入。
+
+**验证**：
+- `BMCU_OLED=1`（默认）编译通过，Flash 不变（60864，行为零回归）；
+- `BMCU_OLED=0` 编译通过，Flash 降到 56384（省 ≈4.5KB），证实"关掉真剥离"；
+- `BMCU_OLED=0 BMCU_AHT20=0` 即老主板最小固件写法，实测省空间数据见 15.6。
 
 ## 16. 编译参数总表与手动开关清单（v4.0-tpu）
 

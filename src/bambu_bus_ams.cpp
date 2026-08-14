@@ -386,7 +386,7 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
             ams_ptr->filament[ch].motion = _filament_motion::send_out;
             ams_ptr->filament_use_flag = 0x02;
             ams_ptr->pressure = 0x4700;
-#ifdef BMCU_OLED
+#ifdef BMCU_OLED_ENABLED
             SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_load);   // 进料覆盖显示
 #endif
         }
@@ -443,7 +443,7 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
             {
                 ams_ptr->pressure = 0x1E34;
             }
-#ifdef BMCU_OLED
+#ifdef BMCU_OLED_ENABLED
             // 打印机明确停止供料(stop_on_use)：立即结束 OLED 霸屏(退出 FEEDING/LOADING)
             SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_idle);
 #endif
@@ -489,7 +489,7 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
             g_local_pullback_seen = 1u;   // v4.0-tpu 方案A: 本机进入过供料(打印/进料)也标记
             g_pd_armed = true;            // v4.0-tpu 修复问题3: 武装重启(本机干过活, 空闲30s可重启)
 #endif
-#ifdef BMCU_OLED
+#ifdef BMCU_OLED_ENABLED
             SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_feed);   // 送料覆盖显示
 #endif
 
@@ -517,7 +517,7 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
             {
                 ams_ptr->filament[ch].motion = _filament_motion::before_pull_back;
             }
-#ifdef BMCU_OLED
+#ifdef BMCU_OLED_ENABLED
             SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_unload); // 退料覆盖显示
 #endif
 
@@ -554,7 +554,7 @@ bool set_motion(unsigned char read_num, unsigned char statu_flags, unsigned char
                 {
                     ams_ptr->filament[ch].motion = _filament_motion::pull_back;
                     ams_ptr->filament_use_flag = 0x02;
-#ifdef BMCU_OLED
+#ifdef BMCU_OLED_ENABLED
                     SSD1306_OLED::notify_action(ch, SSD1306_OLED::oled_action::action_unload); // 退料覆盖显示
 #endif
                 }
