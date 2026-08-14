@@ -7,8 +7,8 @@
 // BMCU_AHT20：AHT20 温湿度传感器总开关（编译宏，缺省 1）。
 //   1 = 编入 AHT20 驱动（新主板有传感器）；0 = 剥离 AHT20 驱动（老主板无传感器，省 Flash/RAM）。
 //   可由编译脚本注入 -DBMCU_AHT20=0 覆盖（见 build_one.sh / build_all_firmwares_fast.py）。
-//   注意：关闭 AHT20 时，OLED 若走软件 I2C 复用总线（BMCU_USE_HW_I2C2=0）将失去底层，
-//        故关闭 AHT20 务必保持 BMCU_USE_HW_I2C2 默认开（=1）。
+//   注意：关闭 AHT20 时，OLED 复用其软件 I2C 总线（PB10/PB11 开漏）将失去底层，
+//        故关闭 AHT20 时 OLED 也无法工作（老主板无屏无传感器可同时 BMCU_OLED=0）。
 #ifndef BMCU_AHT20
 #define BMCU_AHT20 1
 #endif

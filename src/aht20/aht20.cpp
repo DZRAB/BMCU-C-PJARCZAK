@@ -1,6 +1,5 @@
 #include "aht20.h"
 #include "ch32v20x_rcc.h"
-#include "i2c_hw/i2c2_hw.h"   // 硬件 I2C2 支持；BMCU_USE_HW_I2C2 宏在此定义
 
 uint32_t AHT20::g_iic_delay_ticks = 1;
 
@@ -8,9 +7,7 @@ uint32_t AHT20::g_iic_delay_ticks = 1;
 GPIO_TypeDef* const AHT20::IIC_PORT_SCL = GPIOB;
 GPIO_TypeDef* const AHT20::IIC_PORT_SDA = GPIOB;
 
-#if !BMCU_USE_HW_I2C2
-// 软件 I2C 实现（保留作为 fallback）。
-// 当 BMCU_USE_HW_I2C2=1 时，以下函数不会被调用，LTO 会自动剔除。
+// 软件 I2C 实现。硬件 I2C2 备用路径已删除（实测比软件 I2C 更费 Flash 且不省空间）。
 
 // SDA 全程开漏输出：释放=置高（靠外部上拉拉高），拉低=低电平。
 // 关键修复：CH32V203 上动态切换 CNF/MODE（输出<->输入上拉）不可靠，
@@ -91,19 +88,14 @@ uint8_t AHT20::iic_read_byte(bool ack)
     sda_release();                        // 对齐验证版：读完后释放 SDA 回 idle 高
     return b;
 }
-#endif // !BMCU_USE_HW_I2C2
 
 bool AHT20::read_status(uint8_t& status)
 {
-#if BMCU_USE_HW_I2C2
-    return hw_i2c2_read(0x38, &status, 1);
-#else
     iic_start();
     if (!iic_write_byte(ADDR_R)) { iic_stop(); return false; }
     status = iic_read_byte(false);        // NACK 结束
     iic_stop();
     return true;
-#endif
 }
 
 bool AHT20::sensor_init()
@@ -115,11 +107,6 @@ bool AHT20::sensor_init()
 
 void AHT20::init()
 {
-#if BMCU_USE_HW_I2C2
-    (void)time_hw_ticks_per_us(); // 避免未使用函数警告（原软件模式会用它）
-    // 硬件 I2C2：由 hw_i2c2_init() 配置 PB10/PB11 复用开漏、使能 I2C2 外设
-    online_ = hw_i2c2_init();
-#else
     g_iic_delay_ticks = 5u * time_hw_ticks_per_us(); // ~100kHz
     if (!g_iic_delay_ticks) g_iic_delay_ticks = 1u;
 
@@ -146,34 +133,22 @@ void AHT20::init()
     delay(200);                           // 上电稳定
 
     online_ = sensor_init();
-#endif
 }
 
 void AHT20::start_measure()
 {
-#if BMCU_USE_HW_I2C2
-    static const uint8_t cmd[3] = {CMD_MEASURE, 0x33, 0x00};
-    hw_i2c2_write(0x38, cmd, 3, true);
-#else
     iic_start();
     iic_write_byte(ADDR_W);
     iic_write_byte(CMD_MEASURE);
     iic_write_byte(0x33);
     iic_write_byte(0x00);
     iic_stop();
-#endif
 }
 
 bool AHT20::get_measure(float& temperature_c, float& humidity_percent)
 {
     uint8_t buf[7] = {0};
 
-#if BMCU_USE_HW_I2C2
-    if (!hw_i2c2_read(0x38, buf, 7)) {
-        if (run_fail_cnt_ < RUN_FAIL_LIMIT) run_fail_cnt_++;
-        return false;
-    }
-#else
     iic_start();
     if (!iic_write_byte(ADDR_R)) {
         iic_stop();
@@ -183,7 +158,6 @@ bool AHT20::get_measure(float& temperature_c, float& humidity_percent)
     for (int i = 0; i < 6; i++) buf[i] = iic_read_byte(true);  // ACK
     buf[6] = iic_read_byte(false);                            // NACK
     iic_stop();
-#endif
 
     uint8_t status = buf[0];
 
