@@ -31,7 +31,7 @@ BMCU-C 是 **Bambu Lab AMS（自动多色换料系统）的开源替代固件**�
 
 > **上报版本名 `AMS08` ↔ `N3F05` 的来龙去脉**：固件向打印机上报的"型号名"字段（`long_packge_version_version_and_name_AMS08[]`，`bambu_bus_ams.cpp`，`0x103` 版本包）在 V2.1 及以前是 `AMS08`，打印机不会拉黑但不显示环境温湿度具体数值；`v3.1-autoretract` 中曾把它改成 `N3F05` 以便 Bambu Studio 显示温湿度数值，但实测运行两次即被打印机拉黑，故 **`v3.2-fix105` 改回 `AMS08`**（上报号仍保持 `10.50`）。如需显示数值的 `N3F05` 方案需另行解决被拉黑问题。
 >
-> **v4.0-tpu 分支重新启用 `N3F05`**：本分支（TPU 送料 + OLED 屏专用）再次把型号名改回 `N3F05`，以让 Bambu Studio 显示温湿度数值（配合 OLED 屏的温湿度页）。被拉黑问题在 TPU 测试环境未复现，故采用；若后续重测仍被拉黑，可在 `bambu_bus_ams.cpp` 改回字节 `0x41,0x4D,0x53,0x30,0x38`（变量名无需改）。
+> **v4.0-tpu 分支保持 `AMS08`**：本分支（TPU 送料 + OLED 屏专用）**不采用 `N3F05`**，沿用 `AMS08`（上报号仍 `10.50`）。原因：`N3F05` 在 v3.2 实测运行两次即被打印机拉黑，v4.0 上机（2026-08）实测同样被拉黑，故维持 `AMS08` 以保证不被拉黑；Bambu Studio 虽不显示温湿度具体数值，但 OLED 屏温湿度页照常显示（屏显不依赖上报名）。如需 `N3F05` 显示数值方案，需另行解决被拉黑问题。
 
 ---
 
@@ -159,7 +159,7 @@ main.cpp              初始化 + 主循环（调度总线/运动/LED）
 | `0x21A` | MC_online | `get_package_long_packge_MC_online` |
 | `0x211` | read_filament_info | `get_package_long_packge_filament` → 回传 filament 元数据 |
 | `0x218` | set_filament_info_type2 | `get_package_set_filament_type2` → 接收元数据(长格式) |
-| `0x103` | version | `get_package_long_packge_version` → 回传版本/名称（v4.0-tpu 为 `N3F05`，其它版本 `AMS08`） |
+| `0x103` | version | `get_package_long_packge_version` → 回传版本/名称（上报型号名 `AMS08`，上报号 `10.50`） |
 | `0x402` | serial_number | `get_package_long_packge_serial_number` → 回传 SN |
 
 #### BMCU 回复包（BMCU→打印机）
@@ -459,7 +459,7 @@ v3.0 的回抽状态机有两段：
 - `dm_ar_finish_pullback()` 末尾新增：`dm_autoload_gate[i] = 0u;`（主动放行，否则 `dm_auto` Stage1 被永久挡）→ 交回 `dm_auto` 自动装载流程（压上 S2 变 `ks==1`，再送约 12cm 就位）。
 - `motor_motion_switch()` 退料分支新增：`dm_loaded[num] = 0u;`（退料后清空装载标志，交 `dm_auto` 重新送料定位）。
 - 注释同步更新（原注释写的"退到 S2 释放再正推至 S2 再按下定位"与机构事实不符，已改为"退到 SW2 释放即停，然后交 dm_auto 送 12cm"）。
-- `bambu_bus_ams.cpp` 附属改动：`long_packge_version_version_and_name_AMS08[]` 的型号名字段由 `AMS08`（0x41,0x4D,0x53,0x30,0x38）改为 `N3F05`（0x4E,0x33,0x46,0x30,0x35）——为让 Bambu Studio 显示温湿度数值（此改动在 v3.2 被回退，见 13.3「上报版本名回退」）。
+- `bambu_bus_ams.cpp`：`long_packge_version_version_and_name_AMS08[]` 的型号名字段保持 `AMS08`（0x41,0x4D,0x53,0x30,0x38），上报号 `10.50`——不采用 `N3F05`（实测会被打印机拉黑，见第 1 章与 13.3「上报版本名回退」）。
 
 #### 13.2.4 验证点
 - 双开关板退料后无需手动干预即自动送料就位；
@@ -1040,7 +1040,7 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
 
 - **原方案缺陷**：靠"本机退料完成 + 30 秒空闲"判定打印成功不可行——换料、并联切换都会触发退料，单台退料后 30 秒就软复位会误杀正在工作的并联设备。
 - **大佬指点**：485 总线能读到所有 AMS/BMCU 的状态，并联工作中不会复位。故改为**嗅探总线上其它 AMS 的 motion 状态**，仅在"本机全 idle + 总线上所有 AMS 全 idle"时才认为打印真完成。
-- **型号字符串**：v4.0-tpu 把上报型号名由 `AMS08` 改回 `N3F05`（`bambu_bus_ams.cpp`，`0x103` 版本包），以便 Bambu Studio 显示温湿度数值（第 1 章所述 v3.2 回退到 AMS08 是旧版本决策，本分支重新启用 N3F05）。
+- **型号字符串**：v4.0-tpu **保持 `AMS08`**（`bambu_bus_ams.cpp`，`0x103` 版本包，上报号 `10.50`），不采用 `N3F05`。原因：v3.2 实测 `N3F05` 运行两次即被拉黑，v4.0 上机（2026-08）实测同样被拉黑，故维持 `AMS08` 保证不被拉黑（第 1 章已说明）。Bambu Studio 不显示温湿度数值，但 OLED 屏温湿度页照常显示。
 
 #### 14.13.2 并联嗅探机制（`ahub_bus.cpp` / `ahub_bus.h`）
 
@@ -1083,7 +1083,7 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
 - 关闭时：`main.cpp` 的状态机整段 + 相关全局变量声明、以及 `bambu_bus_ams.cpp` 的 `g_local_pullback_seen` 置位/extern 均被 `#if BMCU_AUTO_REBOOT_ENABLE` 包住，编译期完全跳过，无未使用警告、无悬空符号。
 - 该开关与 OLED 调试开关、`BMCU_OLED` 总开关、温湿度模拟探测开关并列，属于"需手动改源码"的开关之一（见 16.3）。
 
-> **改动文件汇总**：`ahub_bus.cpp`（嗅探+判定）、`ahub_bus.h`（声明+include）、`main.cpp`（状态机+开关）、`bambu_bus_ams.cpp`（退料标志置位+型号 N3F05+开关）、`_bus_hardware.cpp/.h`（假离线接口）、`Motion_control.cpp`（8 秒累计锁死修复）。
+> **改动文件汇总**：`ahub_bus.cpp`（嗅探+判定）、`ahub_bus.h`（声明+include）、`main.cpp`（状态机+开关）、`bambu_bus_ams.cpp`（退料标志置位+开关）、`_bus_hardware.cpp/.h`（假离线接口）、`Motion_control.cpp`（8 秒累计锁死修复）。
 
 ---
 
@@ -1119,8 +1119,8 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
   - `draw_comm(bool comm_ok)`：画通讯监控页（详见 15.4）。
   - `draw_sniffer()`：画抓包页（`page_sniffer`，详见 15.4 第 3 页），显示 BMCU↔打印机的原始 RX/TX 通讯抓包，用于上机盯指令交互。
   - `flush()`：差值刷新，把 framebuffer 与上一帧比对后只发变化字节（去闪+降耗核心）。
-- **多页轮询**：`oled_page` 枚举（`page_aht20` / `page_channels` / `page_comm` / `page_sniffer` / `page_count`），由 `tick()` 内部计时器每数秒翻一页（AHT20 页 → 四通道概览页 → 通讯监控页 → 抓包页 循环切换），无需用户干预。
-  - **调试开关**：排查通讯/抓包问题时，可临时在 `tick()` 开头加 `if (true) { draw_sniffer(); return; }` 强制只显抓包页（注意这是调试态，**发布前务必改回 `if (false)` 或删除**，否则 OLED 永远只显抓包页、其它页看不到）。
+- **多页轮询**：`oled_page` 枚举（`page_aht20` / `page_channels` / `page_comm` 为正常模式页；`page_sniffer` / `page_unk_log` 为调试模式页，仅 `BMCU_OLED_DEBUG` 编入），由 `tick()` 内部计时器每数秒翻一页循环切换，无需用户干预。
+  - **调试模式页面范围（仅 `BMCU_OLED_DEBUG` 模式）**：定义该宏后，`tick()` 的轮询边界改为只循环 `page_sniffer`（抓包页）↔ `page_unk_log`（未知指令记录页），**跳过正常三页**——调试时只关心通讯抓包，不需要温湿度等状态页。旧版临时 `if (true) { draw_sniffer(); return; }` 硬霸屏开关已移除（分模式后轮询即可，无需强制单页）。正常模式（无该宏）只轮询前三页，两者互不影响（详见 16.3）。
 
 ### 15.3 主循环集成（`src/main.cpp`）
 
@@ -1128,11 +1128,13 @@ aht20_retries    本轮已尝试次数（上限 AHT20_RETRY_MAX=3）
 - 初始化：`bambubus_init()` 在初始化阶段**标记本机 AMS 槽位在线**（`ams[slot].online = true`），使打印机后续下发的 `filament_type` / 写死型号逻辑能正确生效（否则 `set_filament` 因槽位离线而不处理材质，TPU 识别与写死表均不触发）。
 - 刷新：`g_oled.tick(comm_ok)` 每 1s 调用一次（不阻塞主循环），内部自行处理热插拔重探 + 多页轮询 + 重绘。
 - 温湿度数据取自 AHT20 主循环采样结果（`g_aht20` 的 compartment 温度/湿度），与上报给打印机的数据同源。
-- 动作反馈：送料状态机在 `send_out` / `pulling_back` / `before_on_use` 等动作进入时，仍调用 `g_oled.notify_action(ch, action)`（空操作，仅保留接口兼容），但 v4.0-tpu 调试期已不再顶屏霸屏；动作信息通过抓包页第 0 行 `R on_use/stop` 自然呈现。
+- 动作反馈：送料状态机在 `send_out` / `pulling_back` / `before_on_use` 等动作进入时，仍调用 `g_oled.notify_action(ch, action)`（空操作，仅保留接口兼容），但 v4.0-tpu 调试期已不再顶屏霸屏；动作信息通过抓包页第 0 行 `R FEED/STOP`（短码）自然呈现。
 
 ### 15.4 状态显示设计（与 RGB 联动）
 
 OLED 与 RGB 灯是**同一套状态信息的两种呈现**：不上机 / 通讯失败时 OLED 也能像 RGB 一样提示用户，不依赖打印机下发。
+
+> **正常模式 / 调试模式**：前 3 页（AHT20 状态 / 四通道概览 / 通讯监控）为**正常模式**页面，**始终编入固件**。抓包页（`page_sniffer`）与未知指令完整记录页（`page_unk_log`）为**调试模式**页面，**仅在编译时定义 `BMCU_OLED_DEBUG` 才编入**（详见 15.6 与 16.3）。正常发布不定义该宏 → 这两页及其绘制代码（约 +1KB Flash）完全不编译，节省空间；上机排查通讯时才加 `-DBMCU_OLED_DEBUG` 编一版调试固件。
 
 **第 0 页 · AHT20 状态页（每轮询周期先显示）**
 | 行 | 内容 | 含义 |
@@ -1162,8 +1164,8 @@ OLED 与 RGB 灯是**同一套状态信息的两种呈现**：不上机 / 通讯
 - `SET` +1 但 `ID` 不是 `GFU98` → 打印机下发的不是 TPU for AMS 料号（下发的料号本身不带 TPU 标记），BMCU 不会走写死 TPU 分支。
 - `ID` 是 `GFU98` 且 `SET` +1，但 RGB 灯仍不对 → 写死表/显示链路问题（已非通讯层）。
 
-**第 3 页 · 抓包页（`page_sniffer`，v4.0-tpu 调试新增）**
-本页是 OLED 多页轮询里的**第 4 个显示页**（枚举 `page_sniffer = 3`，从 1 计数即第 4 页），用于在**上机时实时盯 BMCU 与打印机的原始通讯抓包**，排查「打印机到底发了什么指令」「TX 回了什么」这类问题。绘制函数 `draw_sniffer()` → `draw_pkt_overlay()`。
+**第 3 页 · 抓包页（`page_sniffer`，调试模式页 `BMCU_OLED_DEBUG` 编入）**
+本页是 OLED 多页轮询里的**第 4 个显示页**（枚举 `page_sniffer = 3`，从 1 计数即第 4 页），仅在编译 `BMCU_OLED_DEBUG` 时存在。用于在**上机时实时盯 BMCU 与打印机的原始通讯抓包**，排查「打印机到底发了什么指令」「TX 回了什么」这类问题。绘制函数 `draw_sniffer()` → `draw_pkt_overlay()`。正常模式（无该宏）此页不编译、不参与轮询。
 
 该页共 4 行，所有绘制先写入**后台 framebuffer**（`s_fb[8][128]`），由 `flush()` 做**逐字节差值刷新**只发变化字节（详见下「去闪改造」）：
 
@@ -1181,7 +1183,7 @@ SSD1306 若每次刷新都整行 `clear_line()`（清整行再写）或整屏 `c
 
 | 行 | 内容 | 含义 |
 |---|---|---|
-| 行 0 | `RX <标签> <秒数>s` | 最近一次**动作指令**（打印机→BMCU），取自动作缓存 `g_last_act_rx_label`（`feed`=进料/`on_use`=供料中/`stop`=停止/`b_onuse`=上料前/`b_pullb`=退料前）。**进料时显示 `feed`**（之前漏掉 `0x03/0x00` 组合导致 R 行黑，已修复）。无动作时显示 `--`。周期轮询（SN/VER/RD 等）已过滤，不再淹没此行 |
+| 行 0 | `RX <标签> <秒数>s` | 最近一次**动作指令**（打印机→BMCU），取自动作缓存 `g_last_act_rx_label`（短码：`LOAD`=进料/`FEED`=供料中/`STOP`=停止/`PREP`=上料前/`PREU`=退料前）。**进料时显示 `LOAD`**（之前漏掉 `0x03/0x00` 组合导致 R 行黑，已修复）。无动作时显示 `--`。周期轮询（SN/VER/RD 等）已过滤，不再淹没此行 |
 | 行 1 | `TX <标签> <秒数>s` | 最近一次 **BMCU 回发**的动作相关标签（`g_last_tx_label`，仅 MOT/STU 进显示缓存） |
 | 行 2 | `? <原始片段>` 或 `> <原始片段>` | 有**未知指令**（UNK）时，每 ~2.5s 轮显环形缓冲里的一条（`g_unk_ring[4]`，最多存 4 条），`?` 前缀高亮；无未知时显示最近动作指令原始片段 `> ...`。轮显可避免“只看到最后一条”而丢失多次出现的不同未知包 |
 | 行 3 | `P<收包> S<设料> r<RX总> t<TX总> ?<未知数>` | 累计计数：`g_pkg_recv_cnt`/`g_set_filament_cnt`/`g_rx_cnt`/`g_tx_cnt` + `g_unk_cnt`（未知指令累计次数） |
@@ -1233,7 +1235,7 @@ SSD1306 若每次刷新都整行 `clear_line()`（清整行再写）或整屏 `c
 **未知指令 UNK 抓取**：
 - `get_packge_type()` 的 `default` 分支（代码未登记的包，如打印机可能下发的"打印成功/暂停/停止"）记入专用未知缓存 `g_last_unk_*`，`oled_log_rx("UNK", buf)`；
 - 抓包页第 2 行以 `?` 前缀特别高亮显示其原始片段，第 3 行加 `?N` 未知计数；
-- 第 0 行 `R` 只显示动作指令（`on_use`/`stop`/`b_onuse`/`b_pullb`），过滤 SN/VER/RD/RFID/ONL/MC 周期轮询；
+- 第 0 行 `R` 只显示动作指令（`FEED`/`STOP`/`PREP`/`PREU`/`LOAD` 短码），过滤 SN/VER/RD/RFID/ONL/MC 周期轮询；
 - 彻底移除动作霸屏/指令霸屏（`notify_action` 不再顶屏）。
 
 #### 15.7.2 第二轮：进料 R 行黑屏修复 + UNK 环形缓冲轮显（commit `bdb5749`）
@@ -1243,24 +1245,49 @@ SSD1306 若每次刷新都整行 `clear_line()`（清整行再写）或整屏 `c
 2. 第 2 行 `?` 后只显示"最后一条"未知指令，用户抓到的 4 条不同未知包（`A` / `3 3` / `E06A48220` / `S N`）只能看到最新一条，之前的丢失。
 
 **改造**：
-- 补上 `0x03/0x00 → "feed"` 判定，**进料时 R 行显示 `feed`**（修复黑屏）；
+- 补上 `0x03/0x00 → "LOAD"` 判定，**进料时 R 行显示 `LOAD`**（修复黑屏）；
 - 新增未知指令环形缓冲 `g_unk_ring[UNK_RING_N=4][40]`（`g_unk_ring_ms`/`g_unk_ring_head`/`g_unk_ring_cnt`），每条 UNK 写入环形缓冲；
 - 抓包页第 2 行每 ~2.5s 轮显环形缓冲里的一条（`?` 前缀），无未知时回退显示动作片段 `>`；4 条未知包可循环浮现，不再丢失。
 
-#### 15.7.3 ⏳ 待开发：未知指令完整记录页（按到达顺序持久显示）
+#### 15.7.3 ✅ 未知指令完整记录页（已实现，调试模式 `BMCU_OLED_DEBUG`）
 
-> 用户诉求（2026-08-13，当日未实现，留待后续）：**希望把所有未知指令按到达顺序完整记录下来，单独占一页 OLED 显示，避免指令刷得太快看不到、丢失。**
+> 用户诉求（2026-08-13）：**把所有未知指令按到达顺序完整记录下来，单独占一页 OLED 显示，避免指令刷太快看不到、丢失。** 已于 2026-08-14 实现。
 
-当前第 2 行轮显只能缓存最近 4 条、且滚动覆盖，仍会丢失早期指令。待开发方案要点：
+**实现要点**：
+- 新增第 5 页 `page_unk_log`（枚举值，仅 `BMCU_OLED_DEBUG` 编入），绘制函数 `draw_unk_log()`；
+- 环形缓冲 `g_unk_ring` 在调试模式下由 `UNK_RING_N=4` 扩容为 `UNK_RING_N=24`（正常模式仍 4 条，省 RAM），每条写入时带全局递增序号 `g_unk_seq[UNK_RING_N]`（`g_unk_seq_next` 发生器，由 `oled_log_rx` 的 UNK 分支 `++` 填入）；
+- **自动翻页**：4 行滚动，每 1.5s 上滚一行（`s_unklog_top` 在已缓存条数内循环），从最老条目开始按到达顺序列出；每行格式 `?N=<序号> <片段>`（`N`=页内行号 1..4，`<序号>`=全局递增序号，便于对照到达顺序）；无未知时显 `UNK LOG EMPTY`；
+- **不丢不重、每条都记**（用户强调按序），无去重；缓冲溢出时环形覆盖最老条目（最多保留 24 条）；
+- 关联：与抓包页、`?N` 计数同源（`g_unk_cnt` 仍累计总次数）。
 
-- **目标**：新增一个 OLED 页面（如 `page_unk_log`），把**每一条** UNK 按其到达顺序存入一个较大的环形缓冲（建议 ≥ 16~32 条，每条存原始片段 + 序号 + 相对时间戳），翻页时整页列出，可滚动查看历史；
-- **存储**：当前 `g_unk_ring` 仅 4 条、仅存片段，需扩为带序号/计数的结构体数组；注意 RAM 占用（每条 40 字节 × 32 ≈ 1.3KB，加上现有 2KB framebuffer，需确认 20KB 总 RAM 余量，必要时降到 16 条或缩短单条长度）；
-- **交互**：因 128×64 屏单页仅 4 行，记录多时需支持"页内滚动"或"自动翻页"——例如每 2s 上滚一行，或长按某键翻页（需确认 BMCU 是否有可用按键；若无，则用定时自动滚动）；
-- **去重可选**：用户强调"按顺序记录"，故默认**不丢不重、每条都记**；若担心缓冲溢出，可加"同片段 N 秒内合并"开关，但默认关闭以保完整；
-- **触发**：在 `oled_log_rx("UNK", ...)` 处写入缓冲（已有钩子），新增 `draw_unk_log()` 绘制函数，并在 `tick()` 的页面轮询里加入 `page_unk_log`（注意当前调试期 `if (true) { draw_sniffer(); return; }` 强制只显抓包页，恢复正常轮询后该页才会轮到）；
-- **关联**：与 15.4 抓包页、`?N` 计数同源，记录页可一并显示累计 `?N` 与"缓冲已满/溢出"标记。
+**归入调试模式的原因**：抓包页 + 未知指令记录页都只在"上机盯通讯"时用，正常发布不需要，故统一收到 `BMCU_OLED_DEBUG` 宏下，正常固件不含这两页及其绘制代码（约省 1KB Flash）。要上机排查通讯时，手动在 `src/oled/ssd1306_oled.h` 或 `src/bambu_bus_ams.h` 里 `#define BMCU_OLED_DEBUG` 后重编即可（非常规需求，不进编译脚本）。
 
-> 状态：**未开始**。本轮仅记录需求与设计要点，代码留待后续调试 session 实现。
+#### 15.7.4 Flash 优化：F8x16 字模裁剪（commit `67d6c9e`）
+
+**问题**：新增抓包页后，固件 Flash 占用冲到 **97.0%**（128KB 上限逼近，几乎爆 flash），再加页面就会溢出。
+
+**改造**（净省 692B，97.0% → 95.7%）：
+- 把全 F8x16 ASCII 字库（0x20~0x7E 共 95 字符，每字符 16 字节 ≈ 1520B ROM）**裁剪为只含屏幕实际用到的 38 个字符**（`OLED_F8x16[38][16]`），省 912B；
+- 新增 `OLED_FONT_MAP[95]` 映射表：`show_char` 经 `OLED_FONT_MAP[(uint8_t)ch - 0x20]` 查紧凑字模下标，调用方无需改动；
+- 注意裁剪后**新增页面只能使用这 38 个字符**（数字、字母 A-Z、`:`/`%`/`-`/`?`/` ` 等）。若某页用到不在表中的字符会显示空白/错位——加页面时若需新字符，须同步在 `OLED_F8x16` 与 `OLED_FONT_MAP` 补上。
+
+> 该优化仅在"调试模式页加入导致 flash 吃紧"时必要；正常模式页少、flash 更宽裕，但字模裁剪对两者都生效（统一用 38 字模）。
+
+#### 15.7.5 抓包页第 0 行动作标签截断 bug（v4.0-tpu 修复·问题4）
+
+**问题**：抓包页第 0 行 `R` 的标签由 `ssd1306_oled.cpp` 的 `fmt_pkt_header()` 以 `k < 8` 截断——前面已占 `RX ` 3 字节，实际只留 5 字节。原动作标签 `b_onuse`(7) / `on_use`(6) / `b_pullb`(7) 长度都超过 5，被截成 `b_onus` / `on_us` / `b_pull`；用户在 OLED 上把 `b_pullb` 截断后的 `b_pull` 误看成乱码（以为显示 `ER` 是错误码），怀疑 OLED 丢显。实际**不是丢显，是标签字符串被静默截断**。较短的 `stop`(4) / `feed`(4) 不受影响。（注：霸屏已取消，此问题独立于之前的霸屏超时 bug。）
+
+**改造**：
+- 将 5 个动作标签统一改为 **≤4 字符短码**，永不被 5 字节上限截断，且与 OLED 动作霸屏 `motion_to_str()`（`FEED`/`STOP`）语义一致：
+  - `b_onuse` → `PREP`（before_on_use 准备上料）
+  - `on_use` → `FEED`（供料中）
+  - `stop` → `STOP`（stop_on_use 停止供料）
+  - `b_pullb` → `PREU`（before_pull_back 准备退料）
+  - `feed` → `LOAD`（进料 send_out，保留原 0x03/0x00 判定）
+- 同步更新声明处（`bambu_bus_ams.h` / `bambu_bus_ams.cpp` 注释）与本文档 15.4 / 15.7.1 / 15.7.2 的标签描述；
+- 写入仍用 `strncpy(..., sizeof(g_last_act_rx_label)-1)`，短码更宽裕。
+
+**验证**：单编 `bash build_one.sh standard 1 0 D "" 1 GFU02 GFU95 GFU90 GFU85` 通过，Flash 97.8%（60080/61440）未爆；lint 无新增错误。
 
 ## 16. 编译参数总表与手动开关清单（v4.0-tpu）
 
@@ -1300,9 +1327,9 @@ AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_
 
 > ⚠️ **批量脚本的写死表不参与"变体分类/构建缓存 key"**：所有生成的固件使用**同一组**写死型号（由这 4 个环境变量决定）。本脚本即"全量统一写死表"用途，不会为不同写死组合分别产出/缓存。若需不同通道组合各编一份，请改用 `build_one.sh` 多次单编。
 
-### 16.3 必须手动改源码的开关（共 3 处）
+### 16.3 必须手动改源码 / 编译参数的开关（共 5 处）
 
-其余所有宏都由脚本注入，**不用改程序**。只有以下 3 处需手动编辑源码（且都不碰 `platformio.ini`）：
+其余所有宏都由脚本注入，**不用改程序**。以下开关需手动处理（都不碰 `platformio.ini`）：
 
 1. **OLED 总开关** — `src/oled/ssd1306_oled.h` 第 37-38 行
    ```c
@@ -1313,11 +1340,10 @@ AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_
    默认开；想省空间或确认无屏时注释掉即可。
    > 关闭路径修复说明（v4.0-tpu 后期）：早期版本 `bambu_bus_ams.cpp` 有 4 处 `SSD1306_OLED::notify_action(...)` 调用漏了 `#ifdef BMCU_OLED` 保护，手动注释 `#define BMCU_OLED` 后编译器报 'SSD1306_OLED' has not been declared、整个固件编不过——那时"关 OLED 省空间"不可用。现已补上 `#ifdef` 保护，关闭路径恢复：实测注释后 Flash 由 95.7% 降至 89.9%（省约 3.5KB），可正常出固件。
 
-2. **OLED 调试页开关** — `src/oled/ssd1306_oled.cpp` 的 `tick()` 开头
-   ```cpp
-   if (true) { draw_comm(comm_ok); return; }   // ← 排查通讯时临时加；测完必须改回 if(false) 或删除
-   ```
-   加上后 OLED 只显通讯监控页；**发布/正常用前务必改回 `if (false)` 或删掉**，否则永远看不到其它页。
+2. **OLED 调试模式宏 `BMCU_OLED_DEBUG`** — 非常规需求，**不进编译脚本**（无需命令行/平台传参）。需要时手动在文件里定义即可：
+   - 在 `src/oled/ssd1306_oled.h` 顶部 `#ifndef BMCU_OLED` 之前加一行 `#define BMCU_OLED_DEBUG`；
+   - 或在 `src/bambu_bus_ams.h` 的 `UNK_RING_N` 定义附近同理加 `#define BMCU_OLED_DEBUG`。
+   定义后，固件额外编入**调试模式页**：`page_sniffer`（抓包页）与 `page_unk_log`（未知指令完整记录页），且 `tick()` 的轮询边界改为只循环这两页（跳过正常三页）。**正常发布不定义此宏** → 这两页整段不编译、不参与轮询（约省 1KB Flash），OLED 只走正常三页轮询。调试固件上机即只轮询抓包页+记录页；若想临时看正常页，去掉宏重编即可（仅调试用，发布固件不碰）。
 
 3. **温湿度模拟探测开关** — `src/sim_aht20.h` 第 15 行
    ```c
@@ -1327,9 +1353,11 @@ AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_
 
 4. **自动重启（打印完成软复位）总开关** — `src/bambu_bus_ams.h` 顶部
    ```c
-   #define BMCU_AUTO_REBOOT_ENABLE 1   // ← 改 0 关闭自动重启；当前默认开（正式版保持开启）
+   #define BMCU_AUTO_REBOOT_ENABLE 1   // ← 改 0 关闭自动重启；当前默认 1（开启）
    ```
-   `1`=开启后，本机退料 + 本机及总线所有 AMS 全 idle 持续 30s → 假离线 10s → 软复位（见 14.13）；`0`=关闭，TPU 测试阶段不自动重启、方便反复上料调试。该宏定义在共享头文件，`main.cpp` 与 `bambu_bus_ams.cpp` 共用，改一处即全工程生效，**不动编译脚本**。
+   `1`=开启后，本机退料 + 本机及总线所有 AMS 全 idle 持续 30s → 假离线 10s → 软复位（见 14.13）；`0`=关闭，TPU 测试阶段可关闭、方便反复上料调试。该宏定义在共享头文件，`main.cpp` 与 `bambu_bus_ams.cpp` 共用，改一处即全工程生效，**不动编译脚本**。
+
+> 注：第 2 项 `BMCU_OLED_DEBUG` 是**手动改源码定义**的非常规调试开关（不进编译脚本、无命令行参数）；第 1/3/4 项是**手动改源码**开关。原文档把"OLED 调试页开关"写成 `if(true){draw_comm;return}` 并已删除——现统一由 `BMCU_OLED_DEBUG` 宏控制，正常发布固件不编入调试页。
 
 5. **TPU 送料逻辑总开关** — `src/bambu_bus_ams.h` 顶部（与 `BMCU_AUTO_REBOOT_ENABLE` 相邻）
    ```c
@@ -1379,8 +1407,9 @@ AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_
 | # | 问题 | 影响范围 | 根因（代码定位） | 状态 |
 |---|------|---------|----------------|------|
 | 1 | **电机 PWM 啸叫/噪音大** | 全材质（v3.2.1-fix105 基线就存在，非 v4.0 引入） | `Motion_control.cpp` `MC_PWM_init()`：`TIM_Period=999, TIM_Prescaler=1` → 载波 ≈`PCLK1/2000`。本工程 `SystemCoreClock=72MHz`、`APB1=36MHz` → **实际 ≈18kHz**，处于人耳听感上限边缘，电机线圈机械共振辐射可闻谐波；且负载变化时占空比抖动产生 18kHz 附近拍频。另：`PWM==0` 刹车态 `set1=set2=1000`（满占空比双臂同开）仍持续 18kHz 方波。 | **已修复（提载波至 36kHz）**：`MC_PWM_init()` 改 `TIM_Prescaler=1→0` → `36MHz/1000=36kHz`，超出人耳上限且远离机械共振峰；`TIM_Period` 保持 999、`Motion_control_set_PWM` 的 0~1000 满幅映射未动。若仍有轻微噪声，可进一步提频或改刹车态为双路 0 占空比。 |
-| 2 | **N3F05 型号可能被打印机拉黑** | 上报型号为 N3F05 时 | `bambu_bus_ams.cpp` `0x103` 包型号名由 `AMS08` 改 `N3F05`（v4.0 重新启用，为让 Studio 显示温湿度数值）。v3.2 曾实测运行两次即被拉黑而回退 AMS08；v4.0 测试环境未复现，但**未充分长测**。 | **风险项**。若对方反馈「用一阵被拉黑/掉线」，把 `bambu_bus_ams.cpp` 字节改回 `0x41,0x4D,0x53,0x30,0x38`（AMS08）重编即可，OLED 温湿度页仍可显示（屏显不依赖上报名）。 |
+| 2 | **上报型号被打印机拉黑** | 上报型号为 N3F05 时 | `bambu_bus_ams.cpp` `0x103` 包型号名。**v4.0 已采用 `AMS08`**（上报号 `10.50`）规避拉黑；曾考虑 `N3F05`（可让 Studio 显示温湿度数值），但 v3.2 与 v4.0 上机均实测运行两次即被拉黑，故未采用。 | **已规避**。当前上报 `AMS08` 不被拉黑；若后续需 `N3F05` 显示数值，须先解决拉黑问题（`bambu_bus_ams.cpp` 字节改 `0x4E,0x33,0x46,0x30,0x35` 重编），OLED 温湿度页本身不依赖上报名。 |
 | 3 | TPU 软料送料未调好 | 仅设 TPU 的通道 | 见第 14 章，间歇门控/写死表推力仍待实测迭代 | 本期不解决，出稳定版时务必**提醒对方不要设 TPU 型号** |
+| 4 | **抓包页第 0 行 R 标签显示乱码（误以为 `ER` 错误）** | 调试模式抓包页 | `ssd1306_oled.cpp` `fmt_pkt_header()` 以 `k<8` 截断，前面已占 `RX ` 3 字节仅剩 5 字节；原标签 `b_onuse`(7)/`on_use`(6)/`b_pullb`(7) 超长被截成 `b_onus`/`on_us`/`b_pull`，用户误认为丢显/错误码。**并非 OLED 丢显，是标签字符串被静默截断** | **已修复（v4.0-tpu）**：动作标签统一改为 ≤4 字符短码 `PREP`/`FEED`/`STOP`/`PREU`/`LOAD`（见 15.7.5）；与霸屏超时 bug 独立 |
 
 > 注：bug #1 的 18kHz 是相对 `SystemCoreClock=72MHz` 推算；若对方板子实际跑 8MHz（HSI 默认无 PLL），则载波仅 **4kHz**，啸叫更明显。出稳定版前建议先确认目标板时钟配置。
 
@@ -1396,6 +1425,7 @@ AUTO_RETRACT=1 BMCU_TPU_FIX0=GFU98 BMCU_TPU_FIX1=GFU90 BMCU_TPU_FIX2=GFU95 BMCU_
 | `BMCU_DM_AUTO_RETRACT` | 参数 6 `AUTO_RETRACT` | 固定长度回抽（默认随双开关派生） |
 | `BMCU_TPU_FIX0~3` | 参数 7~10 / 环境变量 | 4 通道写死型号表（缺省全 `GFU85`） |
 | `BMCU_OLED` | **头文件默认开** | OLED 驱动总开关（改头文件，非脚本注入） |
+| `BMCU_OLED_DEBUG` | **手动在文件定义，默认不定义** | OLED 调试模式：编入抓包页+未知指令记录页，并强制只显抓包页。非常规需求，不进编译脚本；需要时手动 `#define`（见 16.3 第 2 项）。正常发布不定义（省 ~1KB Flash） |
 
 
 

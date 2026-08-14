@@ -10,8 +10,9 @@
 #include "motion_control.h"
 #include "oled/ssd1306_oled.h"   // v4.0 OLED：动作覆盖显示 notify_action
 
-// v4.0-tpu 方案A: 本机发生退料(before_pull_back)时置位, 作为"打印完成检测"的起点
-// 主循环 main.cpp 看到它 + 本机全 idle + 总线所有 AMS 全 idle + 持续 30s 后触发定时软复位
+// v4.0-tpu 自动重启方案A: 本机进入 on_use(供料中)时由 set_motion 置位 g_pd_armed,
+// 作为"打印完成检测"的起点(不依赖退料——打印完成无退料指令, 旧版只认退料导致永不重启, 已修复)。
+// 主循环 main.cpp 看到 g_pd_armed + 本机全 idle + 总线所有 AMS 全 idle + 持续 30s 后触发定时软复位
 // 由 BMCU_AUTO_REBOOT_ENABLE(bambu_bus_ams.h) 控制开关
 #if BMCU_AUTO_REBOOT_ENABLE
 extern volatile uint8_t g_local_pullback_seen;
@@ -40,9 +41,9 @@ char     g_last_rx_raw[40] = {0}; // 最近一次 RX 原始指令前段（抓包
 
 // 动作指令显示缓存（v4.0-tpu 调试精简）：只记录“打印机动作前后”真正相关的指令，
 // 过滤掉一切周期轮询/心跳（SN/VER/RD/RFID/ONL/MC 以及纯维持态 MOT/STU），
-// 让抓包页第0行 R 稳定显示最近一次动作指令（on_use/stop/before_on_use/before_pullb），
+// 让抓包页第0行 R 稳定显示最近一次动作指令（短码 PREP/FEED/STOP/PREU/LOAD），
 // 不被每秒刷新的 SN 淹没。平时保持显示上一条动作指令（秒数累计）。
-char     g_last_act_rx_label[16] = {0}; // 动作指令可读标签，如 "on_use"/"stop"/"b_onuse"/"b_pullb"
+char     g_last_act_rx_label[16] = {0}; // 动作指令短码标签，如 "PREP"/"FEED"/"STOP"/"PREU"/"LOAD"
 uint64_t g_last_act_rx_ms   = 0u;       // 该动作指令时间戳
 char     g_last_act_rx_raw[40] = {0};   // 该动作指令原始片段
 
@@ -56,11 +57,13 @@ uint32_t g_unk_cnt = 0u;                // 未知指令累计计数
 
 // 未知指令环形缓冲：保存最近 UNK_RING_N 条原始片段，抓包页第2行轮显，
 // 避免“只显示最后一条”而丢失多次出现的不同未知包（如 A / 3 3 / E06A48220 / S N）。
-#define UNK_RING_N 4u
+// 调试模式(BMCU_OLED_DEBUG)下 UNK_RING_N 由 bambu_bus_ams.h 扩展为 24，供完整记录页使用。
 char     g_unk_ring[UNK_RING_N][40] = {0};  // 环形缓冲：每条未知包原始片段
 uint64_t g_unk_ring_ms[UNK_RING_N] = {0};   // 对应时间戳
+uint32_t g_unk_seq[UNK_RING_N] = {0};       // 每条未知指令的全局递增序号
 uint8_t  g_unk_ring_head = 0u;              // 下一个写入位置
 uint8_t  g_unk_ring_cnt  = 0u;              // 已缓存条数（≤ UNK_RING_N）
+uint32_t g_unk_seq_next  = 0u;              // 全局序号发生器（写入时 ++）
 
 void oled_log_rx(const char *label, const char *raw)
 {
@@ -77,11 +80,12 @@ void oled_log_rx(const char *label, const char *raw)
         if (raw) { strncpy(g_last_unk_raw, raw, sizeof(g_last_unk_raw) - 1); g_last_unk_raw[sizeof(g_last_unk_raw) - 1] = '\0'; }
         g_last_unk_ms = g_last_rx_ms;
         g_unk_cnt++;
-        // 写入环形缓冲（最近 4 条），抓包页第2行轮显，避免“只看到最后一条”丢失多包。
+        // 写入环形缓冲（最近 UNK_RING_N 条），抓包页第2行轮显，避免“只看到最后一条”丢失多包。
         uint8_t idx = g_unk_ring_head;
         g_unk_ring[idx][0] = '\0';
         if (raw) { strncpy(g_unk_ring[idx], raw, sizeof(g_unk_ring[0]) - 1); g_unk_ring[idx][sizeof(g_unk_ring[0]) - 1] = '\0'; }
         g_unk_ring_ms[idx] = g_last_rx_ms;
+        g_unk_seq[idx] = ++g_unk_seq_next;   // 递增全局序号，记录页按序显示
         g_unk_ring_head = (uint8_t)((idx + 1u) % UNK_RING_N);
         if (g_unk_ring_cnt < UNK_RING_N) g_unk_ring_cnt++;
         return;   // 未知指令不进入动作缓存，单独处理
@@ -97,12 +101,15 @@ void oled_log_rx(const char *label, const char *raw)
         // MOT/STU 包结构：buf[6]=statu_flag, buf[8]=motion_flag（见 bambubus_printer_motion_package_struct）
         const uint8_t sf = (raw && raw[0]) ? (uint8_t)raw[6] : 0u;
         const uint8_t mf = (raw && raw[0]) ? (uint8_t)raw[8] : 0u;
+        // v4.0-tpu 修复问题4: 抓包页第0行 R 标签由 fmt_pkt_header() 以 k<8 截断(前面已占"RX "3字节,
+        // 实际只剩5字节)。原标签 b_onuse/on_use/b_pullb 长度6~7会被截断(如 b_pullb->"b_pull",
+        // 用户误看成"ER"等乱码)。统一改为 ≤4 字符短码, 永不被截断, 且与 OLED 动作霸屏语义一致。
         const char* act = nullptr;
-        if      (sf == 0x09 && (mf == 0x7F || mf == 0xA5)) act = "b_onuse"; // before_on_use
-        else if (sf == 0x07 && mf == 0x7F)                 act = "on_use";   // on_use（供料中）
-        else if (sf == 0x07 && mf == 0x00)                 act = "stop";     // stop_on_use
-        else if (sf == 0x09 && mf == 0x3F)                 act = "b_pullb";  // before_pull_back
-        else if (sf == 0x03 && mf == 0x00)                 act = "feed";     // 进料 send_out（之前漏掉！导致进料时 R 行黑）
+        if      (sf == 0x09 && (mf == 0x7F || mf == 0xA5)) act = "PREP"; // before_on_use 准备上料
+        else if (sf == 0x07 && mf == 0x7F)                 act = "FEED"; // on_use 供料中
+        else if (sf == 0x07 && mf == 0x00)                 act = "STOP"; // stop_on_use 停止供料
+        else if (sf == 0x09 && mf == 0x3F)                 act = "PREU"; // before_pull_back 准备退料
+        else if (sf == 0x03 && mf == 0x00)                 act = "LOAD"; // 进料 send_out（之前漏掉！导致进料时 R 行黑）
         // 其余（纯维持态心跳）不记录
         if (act)
         {

@@ -58,7 +58,7 @@ extern uint32_t g_rx_cnt;              // RX 指令累计数(不含心跳/在线
 extern uint32_t g_tx_cnt;              // TX 指令累计数
 // 记录最近一次收到的原始指令片段(用于抓包页显示, 仅截前部, 不全文)
 extern char     g_last_rx_raw[40];
-// 动作指令显示缓存（v4.0-tpu 调试精简）：仅 on_use/stop/before_on_use/before_pullb 等
+// 动作指令显示缓存（v4.0-tpu 调试精简）：仅 PREP/FEED/STOP/PREU/LOAD 等
 // 动作前后指令写入，周期轮询(SN/VER/RD/RFID/ONL/MC)与纯心跳已过滤，供抓包页稳定显示。
 extern char     g_last_act_rx_label[16];
 extern uint64_t g_last_act_rx_ms;

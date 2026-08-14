@@ -731,6 +731,65 @@ void SSD1306_OLED::draw_sniffer()
     draw_pkt_overlay(time_ms64());
 }
 
+// v4.0-tpu 未知指令完整记录页（仅调试模式 BMCU_OLED_DEBUG 编入）：
+// 自动翻页滚动显示最近 UNK_RING_N 条未知指令（按到达顺序，带全局递增序号），
+// 用于上机完整记录打印机下发的未登记包。每 1.5s 上滚一行；不足满屏时显示实际条数。
+#ifdef BMCU_OLED_DEBUG
+void SSD1306_OLED::draw_unk_log()
+{
+    if (!s_ready) return;
+
+    const uint64_t now = time_ms64();
+    static uint64_t s_unklog_ms  = 0u;   // 自动翻页计时
+    static uint16_t s_unklog_top = 0u;   // 当前最顶行对应的逻辑序号（0..cnt-1）
+
+    if (g_unk_ring_cnt == 0u)
+    {
+        // 无未知指令：显提示，不滚动
+        draw_line_if_changed(0, "UNK LOG EMPTY");
+        draw_line_if_changed(1, "");
+        draw_line_if_changed(2, "");
+        draw_line_if_changed(3, "");
+        return;
+    }
+
+    // 每 1500ms 上滚一行（在已缓存条数内循环）
+    if (s_unklog_ms == 0u) s_unklog_ms = now;
+    if (now - s_unklog_ms >= 1500u)
+    {
+        s_unklog_ms = now;
+        s_unklog_top = (uint16_t)((s_unklog_top + 1u) % g_unk_ring_cnt);
+    }
+
+    // OLED_LINES=4 行，从 s_unklog_top 起向下列，循环覆盖缓冲
+    char buf[OLED_COLS + 1u];
+    for (uint8_t r = 0; r < OLED_LINES; r++)
+    {
+        uint8_t li = (uint8_t)((s_unklog_top + r) % g_unk_ring_cnt);  // 逻辑序号
+        uint8_t phys = (uint8_t)((g_unk_ring_head + li) % UNK_RING_N); // 物理位置（最老=head）
+        uint32_t seq = g_unk_seq[phys];
+
+        // 行首 "?N=序号 片段"：N=页内行号(1..4)，seq=全局序号，便于对照到达顺序
+        uint8_t k = 0;
+        buf[k++] = '?';
+        buf[k++] = (char)('1' + r);
+        buf[k++] = '=';
+        // 序号最多 5 位
+        if (seq >= 10000u) buf[k++] = (char)('0' + (seq / 10000u % 10u));
+        if (seq >= 1000u)  buf[k++] = (char)('0' + (seq / 1000u  % 10u));
+        if (seq >= 100u)   buf[k++] = (char)('0' + (seq / 100u    % 10u));
+        if (seq >= 10u)    buf[k++] = (char)('0' + (seq / 10u     % 10u));
+        buf[k++] = (char)('0' + (seq % 10u));
+        buf[k++] = ' ';
+        const char* frag = g_unk_ring[phys];
+        for (uint8_t i = 0; frag[i] && k < OLED_COLS; i++) buf[k++] = frag[i];
+        while (k < OLED_COLS) buf[k++] = ' ';
+        buf[OLED_COLS] = 0;
+        draw_line_if_changed(r, buf);
+    }
+}
+#endif  // BMCU_OLED_DEBUG
+
 void SSD1306_OLED::notify_action(uint8_t ch, oled_action act)
 {
     if (!s_ready) return;                 // 无 OLED：直接返回，业务零影响
@@ -794,9 +853,16 @@ void SSD1306_OLED::tick(bool aht20_present, bool aht20_online,
     }
     else if (now >= s_page_next_ms)
     {
-        // 切到下一页
-        s_page = (oled_page)((uint8_t)s_page + 1u);
-        if (s_page >= oled_page::page_count) s_page = oled_page::page_aht20;
+        // 切到下一页（按当前模式的轮询范围循环）
+#ifdef BMCU_OLED_DEBUG
+        s_page = (s_page >= oled_page::page_unk_log)
+                     ? oled_page::page_sniffer
+                     : (oled_page)((uint8_t)s_page + 1u);
+#else
+        s_page = (s_page >= oled_page::page_comm)
+                     ? oled_page::page_aht20
+                     : (oled_page)((uint8_t)s_page + 1u);
+#endif
         s_page_next_ms = now + OLED_PAGE_DWELL_MS;
         clear();   // 切页清屏，避免残留
     }
@@ -810,13 +876,25 @@ void SSD1306_OLED::tick(bool aht20_present, bool aht20_online,
     // 详见 oled_log_rx()/oled_log_tx() 的过滤逻辑与 draw_pkt_overlay() 的动作缓存显示。
 
     // ===== 2) 页面轮询绘制 =====
-    // [临时调试] 设 true 时 OLED 只显示第4页(抓包页 page_sniffer)，方便上机盯 RX/TX 抓包。
-    // 正常发布时改为 false（或整段注释掉）。
-    if (true)
+    // 正常模式(无 BMCU_OLED_DEBUG)：轮询前三页（温湿度/四通道/通讯监控）。
+    // 调试模式(定义 BMCU_OLED_DEBUG)：只轮询调试页（抓包页 + 未知指令记录页），
+    // 跳过前三页——调试时只关心通讯抓包，不需要温湿度等状态页。
+    // 旧版临时 `if(true){draw_sniffer;return}` 硬霸屏开关已移除：分模式后轮询即可，
+    // 调试模式靠宏只轮询调试页，无需强制单页。
+
+    // 轮询边界（按模式）
+#ifdef BMCU_OLED_DEBUG
+    const oled_page page_first = oled_page::page_sniffer;
+    const oled_page page_last  = oled_page::page_unk_log;
+#else
+    const oled_page page_first = oled_page::page_aht20;
+    const oled_page page_last  = oled_page::page_comm;
+#endif
+
+    // 越界保护：若 s_page 不在当前模式合法范围，回到本模式首页
+    if (s_page < page_first || s_page > page_last)
     {
-        draw_sniffer();
-        flush();   // 差值刷新：只发变化字节，不闪不卡
-        return;
+        s_page = page_first;
     }
 
     switch (s_page)
@@ -830,9 +908,14 @@ void SSD1306_OLED::tick(bool aht20_present, bool aht20_online,
         case oled_page::page_comm:
             draw_comm(comm_ok);
             break;
+#ifdef BMCU_OLED_DEBUG
         case oled_page::page_sniffer:   // v4.0-tpu 抓包页
             draw_sniffer();
             break;
+        case oled_page::page_unk_log:   // v4.0-tpu 未知指令完整记录页（自动翻页）
+            draw_unk_log();
+            break;
+#endif
         default:
             break;
     }

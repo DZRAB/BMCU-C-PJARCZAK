@@ -58,10 +58,10 @@ static uint8_t g_fil_dirty = 0;
 static uint8_t g_loaded_ch = 0xFF;
 static uint8_t g_state_dirty = 0;
 
-// v4.0-tpu 方案A: 打印完成后定时软复位(模拟拔插)相关状态
-//   触发条件: 本机发生过退料(pullback) + 本机所有通道 idle + 总线上所有 AMS 所有通道均 idle + 持续 30s
+// v4.0-tpu 自动重启方案A: 打印完成后定时软复位(模拟拔插)相关状态
+//   触发条件: 本机进入过 on_use(由 set_motion 置位 g_pd_armed) + 本机所有通道 idle + 总线上所有 AMS 所有通道均 idle + 持续 30s
 //   -> 假离线 10s -> NVIC_SystemReset()
-//   由 bambu_bus_ams.cpp 的 set_motion(before_pull_back) 置位 g_local_pullback_seen
+//   由 bambu_bus_ams.cpp 的 set_motion(is_on_use, 0x07/0x7F) 置位 g_pd_armed(不再依赖退料, 旧版只认 g_local_pullback_seen 导致打印完成无退料时永不重启)
 //   由 BMCU_AUTO_REBOOT_ENABLE(bambu_bus_ams.h) 控制开关
 #if BMCU_AUTO_REBOOT_ENABLE
 volatile uint8_t g_local_pullback_seen = 0u;
